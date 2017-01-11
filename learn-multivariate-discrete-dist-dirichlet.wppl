@@ -1,0 +1,125 @@
+// Learning a multivariate discrete distribution from data
+
+
+// --------------------------------------------------------------------
+// Helpers
+
+var observe = function(dist, val) {
+  if (val !== undefined) {
+    factor(dist.score(val));
+    return val;
+  } else {
+    return sample(dist, {
+      guide() {
+        return dist; // prevent auto-guide in Forward; always use prior
+      }
+    });
+  }
+};
+
+var squishToProbSimplex = function(x) {
+  var d = ad.value(x).dims[0];
+  var u = ad.tensor.reshape(ad.tensor.concat(x, ad.tensor.fromScalars(0)), [d + 1, 1]);
+  return ad.tensor.softmax(u);
+};
+
+
+// --------------------------------------------------------------------
+// Data and model
+
+var makeDataGenerator = function() {
+  var hyperprior = function(){ return dirichlet(Vector([1, 1, 1])); };
+  var ps0 = hyperprior();
+  var ps1 = repeat(3, function(){ return hyperprior(); })
+  var ps2 = repeat(9, function(){ return hyperprior(); })
+  var s = function(ps) {
+    return sample(Discrete({ ps }));
+  };
+  return function() {
+    var v0 = s(ps0)
+    var v1 = s(ps1[v0]);
+    var v2 = s(ps2[v0*3+v1]);
+    return [v0, v1, v2];
+  }
+}
+
+var dataGen = makeDataGenerator();
+
+var trueDist = Infer({
+  samples: 1000,
+  method: 'forward',
+  model() { return dataGen(); }
+});
+
+var data = repeat(500, dataGen);
+
+var seqLength = data[0].length;
+
+var supportDim = _.uniq(_.flatten(data));  // [0, 1, 2]
+
+var getNet = function(i) {
+  return stack([
+    squishToProbSimplex,
+    affine(3, 'net-' + i + '-2', modelParamL2(100000)),
+    tanh,
+    affine(3, 'net-' + i + '-1', modelParamL2(100000))
+  ]);
+};
+
+var model1 = function(gen, xs) {
+  if (gen.length === seqLength + 1) {
+    return gen.slice(1);
+  } else {    
+    var net = getNet(gen.length);
+    var out = net(Vector(gen));
+    var x = observe(Discrete({ ps: out }), xs ? xs[0] : undefined);
+    return model1(gen.concat([x]), xs ? xs.slice(1) : undefined);
+  }
+};
+
+Optimize({
+  model() { mapData({ data }, function(datum) {
+    return model1([1], datum);
+  }); },
+  steps: 100,
+  optMethod: {adam: {stepSize: .01}}
+});
+
+console.log('True distribution:', trueDist);
+
+console.log('Learned distribution');
+
+Infer({
+  samples: 1000,
+  method: 'forward',
+  guide: true,
+  model() { return model1([1]); }
+});
+
+// Output:
+// 
+// True distribution: Marginal:
+//     [2,1,2] : 0.294
+//     [2,1,1] : 0.175
+//     [2,0,2] : 0.169
+//     [2,0,0] : 0.162
+//     [1,1,0] : 0.046
+//     [2,0,1] : 0.034
+//     [2,1,0] : 0.031
+//     [1,2,0] : 0.017
+//     [0,2,0] : 0.011
+//     ...
+// 
+// Learned distribution
+// Marginal:
+//     [2,1,2] : 0.245
+//     [2,0,2] : 0.134
+//     [2,0,0] : 0.125
+//     [2,1,1] : 0.121
+//     [2,1,0] : 0.051
+//     [3,1,2] : 0.033
+//     [2,1,3] : 0.031
+//     [2,0,1] : 0.03
+//     [1,0,0] : 0.024
+//     [1,1,0] : 0.017
+//     ...
