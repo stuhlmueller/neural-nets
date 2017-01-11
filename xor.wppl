@@ -1,0 +1,48 @@
+// Based on Paul's ml-classifier in webppl-nn/examples
+
+var classifierNet = stack([
+  function(x) { T.get(x, 0); },  // Extract scalar output from vector.
+  sigmoid,                       // Squish to [0,1], representing class probability of input.
+  affine(1, 'net-3', modelParamL2(100)),
+  tanh,
+  affine(3, 'net-1', modelParamL2(100))
+]);
+
+var data = [
+  { x: Vector([ -1, -1 ]), label: false },
+  { x: Vector([ 1, -1 ]), label: true },
+  { x: Vector([ -1, 1 ]), label: true },
+  { x: Vector([ 1, 1 ]), label: false }
+];
+
+var model = function() {
+  mapData({ data }, function(datum) {
+    var p = classifierNet(datum.x);
+    observe(Bernoulli({ p }), datum.label);
+  });
+};
+
+var params = Optimize({
+  model,
+  steps: 1000,
+  optMethod: { adam: { stepSize: 0.1 } }
+});
+
+var optimizedClassifier = usingGuide(classifierNet);
+
+map(
+  function(datum) {
+    return {
+      x: datum.x.data,
+      prob: optimizedClassifier(datum.x)
+    };
+  },
+  data
+);
+
+// Output:
+//
+// [ { x: Float64Array [ -1, -1 ], prob: 0.0007055297972901903 },
+//   { x: Float64Array [ 1, -1 ], prob: 0.9996288818612448 },
+//   { x: Float64Array [ -1, 1 ], prob: 0.9996265282829349 },
+//   { x: Float64Array [ 1, 1 ], prob: 0.0009230507340687968 } ]

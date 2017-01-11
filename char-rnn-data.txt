@@ -1,0 +1,21 @@
+1k steps:
+
+[ { textSize: 20, minLatentDim: 4 },
+  { textSize: 40, minLatentDim: 8 },
+  { textSize: 60, minLatentDim: 8 },
+  { textSize: 80, minLatentDim: 8 },
+  { textSize: 100, minLatentDim: 32 },
+  { textSize: 120, minLatentDim: 16 },
+  { textSize: 140, minLatentDim: 16 },
+  { textSize: 160, minLatentDim: 16 },
+  { textSize: 180, minLatentDim: 16 },
+  { textSize: 200, minLatentDim: 16 },
+  { textSize: 220, minLatentDim: 32 },
+  { textSize: 240, minLatentDim: 64 },
+  { textSize: 260, minLatentDim: 128 } ]
+
+
+10k steps:
+
+  { textSize: 20, minLatentDim: 2 }
+  { textSize: 40, minLatentDim: 4 }

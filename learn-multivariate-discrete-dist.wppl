@@ -1,0 +1,92 @@
+// Learning a multivariate discrete distribution from data
+
+
+// --------------------------------------------------------------------
+// Helpers
+
+var observe = function(dist, val) {
+  if (val !== undefined) {
+    factor(dist.score(val));
+    return val;
+  } else {
+    return sample(dist, {
+      guide() {
+        return dist; // prevent auto-guide in Forward; always use prior
+      }
+    });
+  }
+};
+
+var squishToProbSimplex = function(x) {
+  var d = ad.value(x).dims[0];
+  var u = ad.tensor.reshape(ad.tensor.concat(x, ad.tensor.fromScalars(0)), [d + 1, 1]);
+  return ad.tensor.softmax(u);
+};
+
+
+// --------------------------------------------------------------------
+// Data and model
+
+var data = [
+  [0, 0, 0, 0, 0],
+  [1, 0, 0, 0, 1],
+  [2, 0, 1, 0, 2],
+  [0, 0, 0, 0, 0],
+  [1, 0, 0, 0, 1],
+  [2, 0, 2, 0, 2],
+  [0, 0, 0, 0, 0],
+  [1, 0, 0, 0, 1],
+  [2, 0, 2, 0, 2]
+];
+
+var seqLength = data[0].length;
+
+var supportDim = _.uniq(_.flatten(data));  // [0, 1, 2]
+
+var getNet = function(i) {
+  return stack([
+    squishToProbSimplex,
+    affine(3, 'net-' + i + '-2', modelParamL2(100000)),
+    tanh,
+    affine(3, 'net-' + i + '-1', modelParamL2(100000))
+  ]);
+};
+
+var model1 = function(gen, xs) {
+  if (gen.length === seqLength + 1) {
+    return gen.slice(1);
+  } else {    
+    var net = getNet(gen.length);
+    var out = net(Vector(gen));
+    var x = observe(Discrete({ ps: out }), xs ? xs[0] : undefined);
+    return model1(gen.concat([x]), xs ? xs.slice(1) : undefined);
+  }
+};
+
+Optimize({
+  model() { mapData({ data }, function(datum) {
+    return model1([1], datum);
+  }); },
+  steps: 1000,
+  optMethod: {adam: {stepSize: .01}}
+});
+
+Infer({
+  samples: 1000,
+  method: 'forward',
+  guide: true,
+  model() { return model1([1]); }
+});
+
+// Output:
+//
+// Marginal:
+//     [0,0,0,0,0] : 0.349
+//     [1,0,0,0,1] : 0.339
+//     [2,0,2,0,2] : 0.187
+//     [2,0,1,0,2] : 0.114
+//     [0,0,0,0,1] : 0.002
+//     [3,0,1,0,2] : 0.002
+//     [0,0,0,3,0] : 0.002
+//     [1,0,2,0,2] : 0.001
+//     ...
