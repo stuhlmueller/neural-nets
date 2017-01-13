@@ -21,17 +21,6 @@ var squishToProbSimplex = function(x) {
   return dists.squishToProbSimplex(x);
 }
 
-var range = function(n) {
-  var helper = function(i) {
-    if (i === n) {
-      return [];
-    } else {
-      return [i].concat(helper(i + 1));
-    }
-  };
-  return helper(0);
-}
-
 _.defaults(global, { webpplCache: {} });
 
 var globalCache = global.webpplCache;
@@ -46,11 +35,6 @@ var cached = function(fn) {
       return value;
     }
   }
-}
-
-var onehot = function(i, n) {
-  var xs = range(n);
-  return Vector(map(function(x){ return (i === x) ? 1 : 0; }, xs));
 }
 
 
@@ -74,7 +58,7 @@ var onehotAlphabet = cached(function(letter) {
   var i = _.indexOf(alphabet, letter);
   assert.ok(i != -1, "onehot expected to find letter in alphabet, didn't find " + letter + " in " + alphabet);
   var n = alphabet.length;
-  return onehot(i, n);
+  return oneHot(i, n);
 });
 
 var makeModelParam = modelParamL2(10000);
