@@ -18,9 +18,7 @@ var observe = function(dist, val) {
 };
 
 var squishToProbSimplex = function(x) {
-  var d = ad.value(x).dims[0];
-  var u = ad.tensor.reshape(ad.tensor.concat(x, ad.tensor.fromScalars(0)), [d + 1, 1]);
-  return ad.tensor.softmax(u);
+  return dists.squishToProbSimplex(x);
 };
 
 
