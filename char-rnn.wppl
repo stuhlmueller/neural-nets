@@ -17,9 +17,6 @@ var observe = function(dist, val) {
   }
 };
 
-var squishToProbSimplex = function(x) {
-  return dists.squishToProbSimplex(x);
-}
 
 _.defaults(global, { webpplCache: {} });
 
@@ -65,7 +62,7 @@ var makeModelParam = modelParamL2(10000);
 
 var makeRNN = function() {
   var h_net = stack([tanh, affine(latentDim, 'rnn-h', makeModelParam), concat]);
-  var out_net = stack([squishToProbSimplex, affine(alphabetDim-1, 'rnn-out', makeModelParam)]);  // alphabetDim-1 since squishToProbSimplex increases dim by 1
+  var out_net = stack([softmax, affine(alphabetDim, 'rnn-out', makeModelParam)]);
   return function(h_prev, x_prev) {
     assert.ok(dims(h_prev)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
     var h = h_net([h_prev, onehotAlphabet(x_prev)]);

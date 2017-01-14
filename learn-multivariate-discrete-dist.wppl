@@ -17,10 +17,6 @@ var observe = function(dist, val) {
   }
 };
 
-var squishToProbSimplex = function(x) {
-  return dists.squishToProbSimplex(x);
-};
-
 
 // --------------------------------------------------------------------
 // Data and model
@@ -43,8 +39,8 @@ var supportDim = _.uniq(_.flatten(data));  // [0, 1, 2]
 
 var getNet = function(i) {
   return stack([
-    squishToProbSimplex,
-    affine(3, 'net-' + i + '-2', modelParamL2(100000)),
+    softmax,
+    affine(4, 'net-' + i + '-2', modelParamL2(100000)),
     tanh,
     affine(3, 'net-' + i + '-1', modelParamL2(100000))
   ]);
