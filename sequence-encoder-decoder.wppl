@@ -1,0 +1,159 @@
+// --------------------------------------------------------------------
+// Helpers
+
+var observe = function(dist, val) {
+  if (val !== undefined) {
+    factor(dist.score(val));
+    return val;
+  } else {
+    return sample(dist, {
+      guide() {
+        return dist; // prevent auto-guide in Forward; always use model dist
+      }
+    });
+  }
+};
+
+
+_.defaults(global, { webpplCache: {} });
+
+var globalCache = global.webpplCache;
+
+var cached = function(fn) {
+  return function(x) {
+    if (_.has(globalCache, x)) {
+      return globalCache[x];
+    } else {
+      var value = fn(x);
+      _.assign(globalCache, _.zipObject([x], [value]));
+      return value;
+    }
+  }
+};
+
+var addTerminal = function(xs) {
+  return xs.concat(['$']);
+}
+
+
+// --------------------------------------------------------------------
+// Data and model
+
+var latentDim = 10;
+
+// patterns: [0, 0, 0], [1, 1, 1], [2, 2, 2], [0, 1, 2], [2, 1, 0]
+var data = map(addTerminal, [
+  [0, 0, 0, 0, 0, 0],
+  [1, 1, 1, 0, 0, 0],
+  [1, 1, 1, 1, 1, 1],
+  [2, 2, 2, 1, 1, 1],
+  [2, 2, 2, 2, 1, 0],
+  [1, 1, 1, 2, 2, 2],
+  [0, 1, 2, 0, 1, 2],
+  [0, 1, 2, 0, 0, 0],
+  [2, 1, 0, 2, 1, 0],
+  [0, 0, 0, 2, 1, 0]
+]);
+
+var alphabet = _.sortBy(_.uniq(_.flatten(data).concat(['^', '$'])));
+
+var onehotAlphabet = cached(function(letter) {
+  var i = _.indexOf(alphabet, letter);
+  assert.ok(i != -1, "onehot expected to find letter in alphabet, didn't find " + letter + " in " + alphabet);
+  var n = alphabet.length;
+  return oneHot(i, n);
+});
+
+var makeModelParam = param; // modelParamL2(10);
+
+var makeEncoderStep = function() {
+  var enc_net = stack([tanh, affine(latentDim, 'enc-h', makeModelParam), concat]);
+  return function(prevState, x) {
+    assert.ok(dims(prevState)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
+    var nextState = enc_net([prevState, onehotAlphabet(x)]);
+    return nextState;
+  };
+};
+
+// Encoder repeats encoder step until input is completely digested
+var makeEncoder = function() {
+  var initialState = makeModelParam({ name: 'enc-init', dims: [latentDim, 1] });
+  var encoderStep = makeEncoderStep();
+  var encoder = function(xs, maybeState) {    
+    var state = maybeState || initialState;
+    if (xs.length === 0) {
+      return state;
+    } else {
+      var nextState = encoderStep(state, xs[0]);
+      return encoder(xs.slice(1), nextState);
+    }
+  };
+  return encoder;
+};
+
+var makeDecoderStep = function() {
+  var dec_net_h = stack([tanh, affine(latentDim, 'dec-h', makeModelParam), concat]);
+  var dec_net_out = stack([softmax, affine(alphabet.length, 'dec-out', makeModelParam), concat]);
+  return function(x_prev, state) {
+    assert.ok(dims(state)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
+    var k = onehotAlphabet(x_prev);
+    var nextState = dec_net_h([state, k]);
+    var ps = dec_net_out([nextState, k]);
+    return { ps, state: nextState }
+  };
+};
+
+// Decoder repeats decoder step until terminal symbol is observed or max length is exceeded
+var makeDecoder = function(maxSeqLength) {
+  var decoderStep = makeDecoderStep();
+  var decoder = function(opts) {
+    var state = opts.state;
+    var n = opts.n || 0;
+    var generatedSeq = opts.generatedSeq || ['^'];
+    var remainingSeq = opts.remainingSeq;
+    var x_prev = _.last(generatedSeq);
+    if ((n === (maxSeqLength + 2)) || (x_prev === '$')) {
+      // We're not slicing off the terminal symbol since not all strings self-terminate,
+      // and we might like to know which do
+      return generatedSeq.slice(1);
+    } else {
+      var tmp = decoderStep(x_prev, state);
+      var nextState = tmp.state;
+      var ps = tmp.ps;
+      var observedX = remainingSeq ? remainingSeq[0] : undefined;
+      var generatedX = observe(Categorical({ ps, vs: alphabet }), observedX);
+      return decoder({
+        state: nextState,
+        n: n+1,
+        generatedSeq: generatedSeq.concat([ generatedX ]),
+        remainingSeq: remainingSeq ? remainingSeq.slice(1) : undefined
+      });
+    }
+  };
+  return decoder;
+};
+  
+
+var encoder = makeEncoder();
+var decoder = makeDecoder(6);
+
+Optimize({
+  model() {
+    mapData({ data }, function(datum) {
+      var state = encoder(datum);
+      decoder({ state, remainingSeq: datum });
+    });    
+  },
+  steps: 1000,
+  optMethod: { adam: { stepSize: .01 }}
+});
+
+map(function(datum) {
+  var state = encoder(datum);
+  console.log('Input:', datum);
+  // console.log('Latent:', _.flatten(state.toArray()));
+  console.log('Output:', decoder({ state }));
+  console.log();
+}, data)
+
+'done'
