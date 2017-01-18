@@ -252,7 +252,7 @@ runModel({
 'done'
 
 
-// Output:
+// Output (with training, on dev set):
 //
 // Input:  hello
 // True response:  hello what can i help you with today
@@ -301,3 +301,33 @@ runModel({
 // Model response:  api_call french rome six expensive
 // 
 // ...
+
+
+
+// ====================================================================
+
+// WITHOUT training:
+// 
+// Input:  hello
+// True response:  hello what can i help you with today
+// Model response:  some italian love six party options eight hi please i should morning
+// 
+// Input:  can you book a table for six people with french food
+// True response:  i'm on it
+// Model response:  food some be four help like two four a will book food
+// 
+// Input:  <SILENCE>
+// True response:  where should it be
+// Model response:  ^ with british six table your spanish be ok london looking am
+// 
+// Input:  in bombay
+// True response:  which price range are looking for
+// Model response:  cuisine some many make should many it people cuisine what with four
+// 
+// Input:  i am looking for a cheap restaurant
+// True response:  ok let me look into some options for you
+// Model response:  you italian table help can range for moderate cuisine for preference party
+// 
+// Input:  <SILENCE>
+// True response:  api_call french bombay six cheap
+// Model response:  your have ok people reservation options ^ like am rome into cuisine
