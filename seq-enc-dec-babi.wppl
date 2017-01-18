@@ -1,0 +1,228 @@
+// --------------------------------------------------------------------
+// Helpers
+
+var second = function(x) { return x[1]; };
+
+var toWords = function(x) { return x.split(' '); };
+
+
+var observe = function(dist, val) {
+  if (val !== undefined) {
+    factor(dist.score(val));
+    return val;
+  } else {
+    return sample(dist, {
+      guide() {
+        return dist; // prevent auto-guide in Forward; always use model dist
+      }
+    });
+  }
+};
+
+
+_.defaults(global, { webpplCache: {} });
+
+var globalCache = global.webpplCache;
+
+var cached = function(fn) {
+  return function(x) {
+    if (_.has(globalCache, x)) {
+      return globalCache[x];
+    } else {
+      var value = fn(x);
+      _.assign(globalCache, _.zipObject([x], [value]));
+      return value;
+    }
+  }
+};
+
+var addTerminal = function(xs) {
+  return xs.concat(['$']);
+}
+
+var removeTerminal = function(xs) {
+  if ((xs.length === 0) || (xs[xs.length - 1] !== '$')) {
+    return xs;
+  }
+  return xs.slice(0, xs.length - 1);
+}
+
+
+// --------------------------------------------------------------------
+// Load babi dialog task 1 data
+
+var parseLine = function(rawLine) {
+  var i = rawLine.indexOf(' '); // 
+  var line = rawLine.slice(i + 1);
+  var utterances = line.split('\t');
+  assert.equal(utterances.length, 2);
+  return utterances;
+}
+
+var parseDialog = function(rawDialog) {
+  var rawLines = rawDialog.split('\n');
+  return map(parseLine, rawLines);
+};
+
+var load = function(fn) {
+  var raw = fs.read(fn).trim();
+  return map(parseDialog, raw.split('\n\n'));
+}
+
+var trainingData = load('/data/dialog-models/dialog-babi-task1/dialog-babi-task1-API-calls-trn.txt').slice(0, 100);
+
+var devData = load('/data/dialog-models/dialog-babi-task1/dialog-babi-task1-API-calls-dev.txt').slice(0, 10);
+
+// Note: I'm telling the model about the possible words in the dev data as well!
+var words = _.sortBy(_.uniq(_.flatten(map(toWords, _.flattenDeep(_.concat(trainingData, devData)))).concat(['^', '$'])));
+
+
+// --------------------------------------------------------------------
+// Encoder + decoder
+
+var latentDim = 10;
+
+var onehotWords = cached(function(word) {
+  var i = _.indexOf(words, word);
+  assert.ok(i != -1, "onehot expected to find word in words, didn't find " + word + " in " + words);
+  var n = words.length;
+  return oneHot(i, n);
+});
+
+var makeModelParam = param; // modelParamL2(10);
+
+var makeEncoderStep = function() {
+  var enc_net = stack([tanh, affine(latentDim, 'enc-h', makeModelParam), concat]);
+  return function(prevState, x) {
+    assert.ok(dims(prevState)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
+    var nextState = enc_net([prevState, onehotWords(x)]);
+    return nextState;
+  };
+};
+
+// Encoder repeats encoder step until input is completely digested
+var makeEncoder = function() {
+  var initialState = makeModelParam({ name: 'enc-init', dims: [latentDim, 1] });
+  var encoderStep = makeEncoderStep();
+  var encoder = function(xs, maybeState) {    
+    var state = maybeState || initialState;
+    if (xs.length === 0) {
+      return state;
+    } else {
+      var nextState = encoderStep(state, xs[0]);
+      return encoder(xs.slice(1), nextState);
+    }
+  };
+  return encoder;
+};
+
+var makeDecoderStep = function() {
+  var dec_net_h = stack([tanh, affine(latentDim, 'dec-h', makeModelParam), concat]);
+  var dec_net_out = stack([softmax, affine(words.length, 'dec-out', makeModelParam), concat]);
+  return function(x_prev, state) {
+    assert.ok(dims(state)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
+    var k = onehotWords(x_prev);
+    var nextState = dec_net_h([state, k]);
+    var ps = dec_net_out([nextState, k]);
+    return { ps, state: nextState }
+  };
+};
+
+// Decoder repeats decoder step until terminal symbol is observed or max length is exceeded
+var makeDecoder = function(maxSeqLength) {
+  var decoderStep = makeDecoderStep();
+  var decoder = function(opts) {
+    var state = opts.state;
+    var n = opts.n || 0;
+    var generatedSeq = opts.generatedSeq || ['^'];
+    var remainingSeq = opts.remainingSeq;
+    var x_prev = _.last(generatedSeq);
+    if ((n === (maxSeqLength + 2)) || (x_prev === '$')) {
+      // We're not slicing off the terminal symbol since not all strings self-terminate,
+      // and we might like to know which do
+      return generatedSeq.slice(1);
+    } else {
+      var tmp = decoderStep(x_prev, state);
+      var nextState = tmp.state;
+      var ps = tmp.ps;
+      var observedX = remainingSeq ? remainingSeq[0] : undefined;
+      var generatedX = observe(Categorical({ ps, vs: words }), observedX);
+      return decoder({
+        state: nextState,
+        n: n+1,
+        generatedSeq: generatedSeq.concat([ generatedX ]),
+        remainingSeq: remainingSeq ? remainingSeq.slice(1) : undefined
+      });
+    }
+  };
+  return decoder;
+};
+
+
+// --------------------------------------------------------------------
+// Main
+
+var encoder = makeEncoder();
+
+var decoder = makeDecoder(10);
+
+Optimize({
+  model() {
+    mapData({ data: trainingData }, function(datum) {
+      map(function(exchange) {
+        var utterance = toWords(exchange[0]);
+        var response = toWords(exchange[1]);
+        var state = encoder(utterance);
+        decoder({ state, remainingSeq: addTerminal(response) });
+      }, datum);
+    });    
+  },
+  steps: 100,
+  optMethod: { adam: { stepSize: .01 }}
+});
+
+
+map(function(datum) {
+  map(function(exchange) {
+    var utterance = toWords(exchange[0]);
+    var trueResponse = toWords(exchange[1]);
+    var state = encoder(utterance);
+    var modelResponse = removeTerminal(decoder({ state }));
+    console.log('Input: ', utterance.join(' '));
+    console.log('True response: ', trueResponse.join(' '));
+    console.log('Model response: ', modelResponse.join(' '));
+    console.log()
+  }, datum);  
+  console.log('--------------------------------------------------------------------');
+}, devData);
+
+'done'
+
+
+// Output:
+// 
+// Input:  hi
+// True response:  hello what can i help you with today
+// Model response:  hello what can i help you with today
+// 
+// Input:  may i have a table with spanish cuisine in rome
+// True response:  i'm on it
+// Model response:  i'm on it
+// 
+// Input:  <SILENCE>
+// True response:  how many people would be in your party
+// Model response:  where should it be
+// 
+// Input:  for eight please
+// True response:  which price range are looking for
+// Model response:  ok let me look ok let me look where it people hello
+// 
+// Input:  in a expensive price range please
+// True response:  ok let me look into some options for you
+// Model response:  which price range some looking for
+// 
+// Input:  <SILENCE>
+// True response:  api_call spanish rome eight expensive
+// Model response:  any preference on it you with today
+// 
+// ...
