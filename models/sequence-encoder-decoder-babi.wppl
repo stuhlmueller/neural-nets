@@ -1,3 +1,7 @@
+// Run in webppl directory:
+// ./webppl --require ../webppl-fs/ --require ../webppl-nn/ ../neural-nets/models/sequence-encoder-decoder-babi.wppl
+
+
 // --------------------------------------------------------------------
 // Helpers
 
@@ -90,9 +94,9 @@ var load = function(fn) {
   return map(parseDialog, raw.split('\n\n'));
 }
 
-var trainingData = load('/data/dialog-models/dialog-babi-task1/dialog-babi-task1-API-calls-trn.txt');
+var trainingData = load('/data/neural-nets/data/dialog-babi-task1/dialog-babi-task1-API-calls-trn.txt');
 
-var devData = load('/data/dialog-models/dialog-babi-task1/dialog-babi-task1-API-calls-dev.txt').slice(0, 10);
+var devData = load('/data/neural-nets/data/dialog-babi-task1/dialog-babi-task1-API-calls-dev.txt').slice(0, 10);
 
 // Note: I'm telling the model about the possible words in the dev data as well!
 var words = _.sortBy(_.uniq(_.flatten(map(toWords, _.flattenDeep(_.concat(trainingData, devData)))).concat(['^', '$'])));
@@ -113,10 +117,10 @@ var onehotWords = cached(function(word) {
 var makeModelParam = param; // modelParamL2(10);
 
 var makeEncoderStep = function() {
-  var enc_net = stack([tanh, affine(latentDim, 'enc-h', makeModelParam), concat]);
+  var enc_net = lstm(latentDim, 'enc-h', makeModelParam);
   return function(prevState, x) {
     assert.ok(dims(prevState)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
-    var nextState = enc_net([prevState, onehotWords(x)]);
+    var nextState = enc_net(prevState, onehotWords(x));
     return nextState;
   };
 };
@@ -141,12 +145,12 @@ var makeEncoder = function() {
 };
 
 var makeDecoderStep = function() {
-  var dec_net_h = stack([tanh, affine(latentDim, 'dec-h', makeModelParam), concat]);
+  var dec_net_h = lstm(latentDim, 'dec-h', makeModelParam);
   var dec_net_out = stack([softmax, affine(words.length, 'dec-out', makeModelParam), concat]);
   return function(x_prev, state) {
     assert.ok(dims(state)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
     var k = onehotWords(x_prev);
-    var nextState = dec_net_h([state, k]);
+    var nextState = dec_net_h(state, k);
     var ps = dec_net_out([nextState, k]);
     return { ps, state: nextState }
   };
@@ -253,7 +257,7 @@ runModel({
 
 
 // Output (with training, on dev set):
-//
+// 
 // Input:  hello
 // True response:  hello what can i help you with today
 // Model response:  hello what can i help you with today
@@ -264,11 +268,11 @@ runModel({
 // 
 // Input:  <SILENCE>
 // True response:  where should it be
-// Model response:  ok let me look into some options for you
+// Model response:  where should it be
 // 
 // Input:  in bombay
 // True response:  which price range are looking for
-// Model response:  i'm on it
+// Model response:  which price range are looking for
 // 
 // Input:  i am looking for a cheap restaurant
 // True response:  ok let me look into some options for you
@@ -276,10 +280,9 @@ runModel({
 // 
 // Input:  <SILENCE>
 // True response:  api_call french bombay six cheap
-// Model response:  api_call french paris two moderate
+// Model response:  api_call french bombay madrid two cheap
 // 
 // --------------------------------------------------------------------
-// 
 // Input:  hi
 // True response:  hello what can i help you with today
 // Model response:  hello what can i help you with today
@@ -290,18 +293,15 @@ runModel({
 // 
 // Input:  <SILENCE>
 // True response:  where should it be
-// Model response:  where should it be
+// Model response:  any preference on a type of cuisine
 // 
 // Input:  rome please
 // True response:  ok let me look into some options for you
-// Model response:  how many people would be in your party
+// Model response:  ok let me look into some options for you
 // 
 // Input:  <SILENCE>
 // True response:  api_call italian rome six cheap
-// Model response:  api_call french rome six expensive
-// 
-// ...
-
+// Model response:  api_call spanish paris eight cheap
 
 
 // ====================================================================
