@@ -7,7 +7,21 @@
 
 var second = function(x) { return x[1]; };
 
-var toWords = function(x) { return x.split(' '); };
+var reduceLeft = function(f, init, arr) {
+  // if (arr.length > 0) {
+  //   return reduceLeft(f, f(init, arr[0]), rest(arr));
+  // } else {
+  //   return init;
+  // }
+  var helper = function(i, init) {
+    if (i < arr.length) {
+      return helper(i + 1, f(init, arr[i]));
+    } else {
+      return init;
+    }
+  };
+  return helper(0, init);
+};
 
 
 var observe = function(dist, val) {
@@ -41,35 +55,24 @@ var cached = function(fn) {
 };
 
 
-var addTerminal = function(xs) {
-  return xs.concat(['$']);
+var addEndMarker = function(words) {
+  return words.concat(['$']);
 };
 
-var removeTerminal = function(xs) {
-  if ((xs.length === 0) || (xs[xs.length - 1] !== '$')) {
-    return xs;
+var removeEndMarker = function(words) {
+  if ((words.length === 0) || (words[words.length - 1] !== '$')) {
+    return words;
   }
-  return xs.slice(0, xs.length - 1);
+  return words.slice(0, words.length - 1);
 };
 
-var wordsToString = function(xs) {
-  return removeTerminal(xs).join(' ');
+
+var wordsToString = function(words) {
+  return removeEndMarker(words).join(' ');
 };
 
-var reduceLeft = function(f, init, arr) {
-  // if (arr.length > 0) {
-  //   return reduceLeft(f, f(init, arr[0]), rest(arr));
-  // } else {
-  //   return init;
-  // }
-  var helper = function(i, init) {
-    if (i < arr.length) {
-      return helper(i + 1, f(init, arr[i]));
-    } else {
-      return init;
-    }
-  };
-  return helper(0, init);
+var stringToWords = function(s) {
+  return addEndMarker(s.split(' '));
 };
 
 
@@ -77,7 +80,7 @@ var reduceLeft = function(f, init, arr) {
 // Load babi dialog task 1 data
 
 var parseLine = function(rawLine) {
-  var i = rawLine.indexOf(' '); // 
+  var i = rawLine.indexOf(' ');  // Remove line index
   var line = rawLine.slice(i + 1);
   var utterances = line.split('\t');
   assert.equal(utterances.length, 2);
@@ -99,7 +102,7 @@ var trainingData = load('/data/neural-nets/data/dialog-babi-task1/dialog-babi-ta
 var devData = load('/data/neural-nets/data/dialog-babi-task1/dialog-babi-task1-API-calls-dev.txt').slice(0, 10);
 
 // Note: I'm telling the model about the possible words in the dev data as well!
-var words = _.sortBy(_.uniq(_.flatten(map(toWords, _.flattenDeep(_.concat(trainingData, devData)))).concat(['^', '$'])));
+var words = _.sortBy(_.uniq(_.flatten(map(stringToWords, _.flattenDeep(_.concat(trainingData, devData)))).concat(['^', '$'])));
 
 
 // --------------------------------------------------------------------
@@ -114,72 +117,72 @@ var onehotWords = cached(function(word) {
   return oneHot(i, n);
 });
 
-var makeModelParam = param; // modelParamL2(10);
+var makeModelParam = param;  // no regularization
 
 var makeEncoderStep = function() {
-  var enc_net = lstm(latentDim, 'enc-h', makeModelParam);
-  return function(prevState, x) {
+  var encoderNet = lstm(latentDim, 'encoder-net', makeModelParam);
+  return function(prevState, word) {
     assert.ok(dims(prevState)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
-    var nextState = enc_net(prevState, onehotWords(x));
+    var nextState = encoderNet(prevState, onehotWords(word));
     return nextState;
   };
 };
 
 var makeInitialEncoderState = function() {
-  return makeModelParam({ name: 'enc-init', dims: [latentDim, 1] });
+  return makeModelParam({ name: 'encoder-init', dims: [latentDim, 1] });
 };
 
 // Encoder repeats encoder step until input is completely digested
 var makeEncoder = function() {
   var encoderStep = makeEncoderStep();
-  var encoder = function(xs, maybeState) {    
+  var encoder = function(words, maybeState) {    
     var state = maybeState || makeInitialEncoderState();
-    if (xs.length === 0) {
+    if (words.length === 0) {
       return state;
     } else {
-      var nextState = encoderStep(state, xs[0]);
-      return encoder(xs.slice(1), nextState);
+      var nextState = encoderStep(state, words[0]);
+      return encoder(words.slice(1), nextState);
     }
   };
   return encoder;
 };
 
 var makeDecoderStep = function() {
-  var dec_net_h = lstm(latentDim, 'dec-h', makeModelParam);
-  var dec_net_out = stack([softmax, affine(words.length, 'dec-out', makeModelParam), concat]);
-  return function(x_prev, state) {
+  var decoderNetLatent = lstm(latentDim, 'decoder-net-latent', makeModelParam);
+  var decoderNetOutput = stack([softmax, affine(words.length, 'decoder-net-output', makeModelParam), concat]);
+  return function(prevWord, state) {
     assert.ok(dims(state)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
-    var k = onehotWords(x_prev);
-    var nextState = dec_net_h(state, k);
-    var ps = dec_net_out([nextState, k]);
+    var wordVec = onehotWords(prevWord);
+    var nextState = decoderNetLatent(state, wordVec);
+    var ps = decoderNetOutput([nextState, wordVec]);
     return { ps, state: nextState }
   };
 };
 
 // Decoder repeats decoder step until terminal symbol is observed or max length is exceeded
-var makeDecoder = function(maxSeqLength) {
+var makeDecoder = function(maxWords) {
   var decoderStep = makeDecoderStep();
   var decoder = function(opts) {
     var state = opts.state;
     var n = opts.n || 0;
-    var generatedSeq = opts.generatedSeq || ['^'];
-    var remainingSeq = opts.remainingSeq;
-    var x_prev = _.last(generatedSeq);
-    if ((n === (maxSeqLength + 2)) || (x_prev === '$')) {
+    var generatedWords = opts.generatedWords || ['^'];
+    var observedWords = opts.observedWords;
+    var prevWord = _.last(generatedWords);
+    if ((n === (maxWords + 2)) || (prevWord === '$')) {
       // We're not slicing off the terminal symbol since not all strings self-terminate,
       // and we might like to know which do
-      return generatedSeq.slice(1);
+      return generatedWords.slice(1);
     } else {
-      var tmp = decoderStep(x_prev, state);
+      var tmp = decoderStep(prevWord, state);
       var nextState = tmp.state;
       var ps = tmp.ps;
-      var observedX = remainingSeq ? remainingSeq[0] : undefined;
-      var generatedX = observe(Categorical({ ps, vs: words }), observedX);
+      var observedWord = observedWords ? observedWords[0] : undefined;
+      var generatedWord = observe(Categorical({ ps, vs: words }), observedWord);
       return decoder({
         state: nextState,
         n: n+1,
-        generatedSeq: generatedSeq.concat([ generatedX ]),
-        remainingSeq: remainingSeq ? remainingSeq.slice(1) : undefined
+        generatedWords: generatedWords.concat([generatedWord]),
+        observedWords: observedWords ? observedWords.slice(1) : undefined
       });
     }
   };
@@ -189,7 +192,6 @@ var makeDecoder = function(maxSeqLength) {
 
 // --------------------------------------------------------------------
 // Main
-
 
 var encoder = makeEncoder();
 
@@ -201,13 +203,13 @@ var runModel = function(options) { // data, withObservations, callback, batchSiz
   var initialEncoderState = makeInitialEncoderState();
   mapData({ data: options.data, batchSize: options.batchSize }, function(datum) {
     
-    reduceLeft(function (prevState, x) {
-      var utterance = addTerminal(toWords(x[0]));
-      var trueResponse = addTerminal(toWords(x[1]));
+    reduceLeft(function (prevState, exchange) {
+      var utterance = stringToWords(exchange[0]);
       var midState = encoder(utterance, prevState);
+      var trueResponse = stringToWords(exchange[1]);
       var modelResponse = decoder({
         state: midState,
-        remainingSeq: options.withObservations ? trueResponse : undefined
+        observedWords: options.withObservations ? trueResponse : undefined
       });
       if (options.callbackOnExchange) {
         var callback = options.callbackOnExchange;
@@ -221,9 +223,7 @@ var runModel = function(options) { // data, withObservations, callback, batchSiz
       var callback = options.callbackOnDialog;
       callback();
     }
-    
   });
-
 };
 
 
@@ -243,9 +243,10 @@ Optimize({
 runModel({
   data: devData,
   callbackOnExchange(utterance, trueResponse, modelResponse) {
-    console.log('Input: ', wordsToString(utterance));
-    console.log('True response: ', wordsToString(trueResponse));
-    console.log('Model response: ', wordsToString(modelResponse));
+    var log = function(label, words) { console.log(label + ': ', wordsToString(words)); }
+    log('Input', utterance);
+    log('True response', trueResponse);
+    log('Model response', modelResponse);
     console.log()
   },
   callbackOnDialog() {
