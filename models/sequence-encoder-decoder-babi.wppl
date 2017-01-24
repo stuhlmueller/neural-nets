@@ -166,28 +166,22 @@ var makeDecoder = function(maxWords) {
   var decoder = function(opts) {
     var state = opts.state;
     var n = opts.n || 0;
-    var logLike = opts.logLike || 0;
     var generatedWords = opts.generatedWords || ['^'];
     var observedWords = opts.observedWords;
     var prevWord = _.last(generatedWords);
     if ((n === (maxWords + 2)) || (prevWord === '$')) {
       // We're not slicing off the terminal symbol since we'd like to know which
       // strings were terminated by the maxWords constrained, and which self-terminated
-      return {
-        logLike,
-        generatedWords: generatedWords.slice(1)
-      };
+      return generatedWords.slice(1);
     } else {
       var tmp = decoderStep(prevWord, state);
       var nextState = tmp.state;
       var ps = tmp.ps;
       var observedWord = observedWords ? observedWords[0] : undefined;
       var wordDist = Categorical({ ps, vs: words });
-      var incLogLike = observedWord ? wordDist.score(observedWord) : 0;
       var generatedWord = observe(wordDist, opts.useObservations ? observedWord : undefined);
       return decoder({
         state: nextState,
-        logLike: logLike + incLogLike,
         n: n + 1,
         generatedWords: generatedWords.concat([generatedWord]),
         observedWords: observedWords ? observedWords.slice(1) : undefined,
@@ -218,12 +212,11 @@ var runModel = function(options) {
       var utterance = stringToWords(exchange[0]);
       var midState = encoder(utterance, prevState);
       var trueResponse = stringToWords(exchange[1]);
-      var tmp = decoder({
+      var modelResponse = decoder({
         state: midState,
         observedWords: trueResponse,
         useObservations: options.useObservations
       });
-      var modelResponse = tmp.generatedWords;
       if (options.callbackOnExchange) {
         var callback = options.callbackOnExchange;
         callback(utterance, trueResponse, modelResponse);
@@ -259,16 +252,16 @@ var doOptimize = function() {
       return runModel({
         data: trainingData,
         useObservations: true,
-        batchSize: 20
+        batchSize: 1 // 20
       });
     },
-    steps: 10,
+    steps: 100,
     optMethod: { adam: { stepSize: .01 }}
   });
 };
 
 
-repeat(100, function() {
+repeat(10, function() {
   doOptimize();
   console.log('Held-out log-likelihood:', getHeldOutLogLikelihood());
 });
