@@ -160,29 +160,38 @@ var makeDecoderStep = function() {
 };
 
 // Decoder repeats decoder step until terminal symbol is observed or max length is exceeded
+
 var makeDecoder = function(maxWords) {
   var decoderStep = makeDecoderStep();
   var decoder = function(opts) {
     var state = opts.state;
     var n = opts.n || 0;
+    var logLike = opts.logLike || 0;
     var generatedWords = opts.generatedWords || ['^'];
     var observedWords = opts.observedWords;
     var prevWord = _.last(generatedWords);
     if ((n === (maxWords + 2)) || (prevWord === '$')) {
-      // We're not slicing off the terminal symbol since not all strings self-terminate,
-      // and we might like to know which do
-      return generatedWords.slice(1);
+      // We're not slicing off the terminal symbol since we'd like to know which
+      // strings were terminated by the maxWords constrained, and which self-terminated
+      return {
+        logLike,
+        generatedWords: generatedWords.slice(1)
+      };
     } else {
       var tmp = decoderStep(prevWord, state);
       var nextState = tmp.state;
       var ps = tmp.ps;
       var observedWord = observedWords ? observedWords[0] : undefined;
-      var generatedWord = observe(Categorical({ ps, vs: words }), observedWord);
+      var wordDist = Categorical({ ps, vs: words });
+      var incLogLike = observedWord ? wordDist.score(observedWord) : 0;
+      var generatedWord = observe(wordDist, opts.useObservations ? observedWord : undefined);
       return decoder({
         state: nextState,
-        n: n+1,
+        logLike: logLike + incLogLike,
+        n: n + 1,
         generatedWords: generatedWords.concat([generatedWord]),
-        observedWords: observedWords ? observedWords.slice(1) : undefined
+        observedWords: observedWords ? observedWords.slice(1) : undefined,
+        useObservations: opts.useObservations
       });
     }
   };
@@ -198,19 +207,23 @@ var encoder = makeEncoder();
 var decoder = makeDecoder(10);
 
 
-var runModel = function(options) { // data, withObservations, callback, batchSize
+var runModel = function(options) {
+  // options: { data, useObservations, callbackOnExchange, callbackOnDialog, batchSize }
 
   var initialEncoderState = makeInitialEncoderState();
+  
   mapData({ data: options.data, batchSize: options.batchSize }, function(datum) {
-    
-    reduceLeft(function (prevState, exchange) {
+
+    reduceLeft(function(prevState, exchange) {
       var utterance = stringToWords(exchange[0]);
       var midState = encoder(utterance, prevState);
       var trueResponse = stringToWords(exchange[1]);
-      var modelResponse = decoder({
+      var tmp = decoder({
         state: midState,
-        observedWords: options.withObservations ? trueResponse : undefined
+        observedWords: trueResponse,
+        useObservations: options.useObservations
       });
+      var modelResponse = tmp.generatedWords;
       if (options.callbackOnExchange) {
         var callback = options.callbackOnExchange;
         callback(utterance, trueResponse, modelResponse);
@@ -224,38 +237,64 @@ var runModel = function(options) { // data, withObservations, callback, batchSiz
       callback();
     }
   });
+  
 };
 
 
-Optimize({
-  model() {
-    return runModel({
-      data: trainingData,
-      withObservations: true,
-      batchSize: 20
-    });
-  },
-  steps: 300,
-  optMethod: { adam: { stepSize: .01 }}
+var getHeldOutLogLikelihood = function() {
+  var stats = Infer({
+    method: 'SMC',
+    particles: 1,
+    model() {
+      return runModel({ data: devData, useObservations: true });
+    }
+  });
+  return stats.normalizationConstant;
+};
+
+
+var doOptimize = function() {
+  Optimize({
+    model() {
+      return runModel({
+        data: trainingData,
+        useObservations: true,
+        batchSize: 20
+      });
+    },
+    steps: 10,
+    optMethod: { adam: { stepSize: .01 }}
+  });
+};
+
+
+repeat(100, function() {
+  doOptimize();
+  console.log('Held-out log-likelihood:', getHeldOutLogLikelihood());
 });
 
 
-runModel({
-  data: devData,
-  callbackOnExchange(utterance, trueResponse, modelResponse) {
-    var log = function(label, words) { console.log(label + ': ', wordsToString(words)); }
-    log('Input', utterance);
-    log('True response', trueResponse);
-    log('Model response', modelResponse);
-    console.log()
-  },
-  callbackOnDialog() {
-    console.log('--------------------------------------------------------------------');
+Infer({
+  method: 'forward',
+  model() {
+    return runModel({
+      data: devData,
+      callbackOnExchange(utterance, trueResponse, modelResponse) {
+        var log = function(label, words) { console.log(label + ': ', wordsToString(words)); }
+        log('Input', utterance);
+        log('True response', trueResponse);
+        log('Model response', modelResponse);
+        console.log()
+      },
+      callbackOnDialog() {
+        console.log('--------------------------------------------------------------------');
+      }
+    });
   }
-})
+});
+
 
 'done'
-
 
 // Output (with training, on dev set):
 // 
