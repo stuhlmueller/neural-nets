@@ -1,0 +1,338 @@
+// Run in webppl directory:
+// ./webppl --require ../webppl-fs/ --require ../webppl-nn/ ../neural-nets/models/hred-babi.wppl
+
+
+// --------------------------------------------------------------------
+// Helpers
+
+var identity = function(x) { return x; };
+
+var second = function(x) { return x[1]; };
+
+var reduceLeft = function(f, init, arr) {
+  // if (arr.length > 0) {
+  //   return reduceLeft(f, f(init, arr[0]), rest(arr));
+  // } else {
+  //   return init;
+  // }
+  var helper = function(i, init) {
+    if (i < arr.length) {
+      return helper(i + 1, f(init, arr[i]));
+    } else {
+      return init;
+    }
+  };
+  return helper(0, init);
+};
+
+
+var observe = function(dist, val) {
+  if (val !== undefined) {
+    factor(dist.score(val));
+    return val;
+  } else {
+    return sample(dist, {
+      guide() {
+        return dist; // prevent auto-guide in Forward; always use model dist
+      }
+    });
+  }
+};
+
+
+_.defaults(global, { webpplCache: {} });
+
+var globalCache = global.webpplCache;
+
+var cached = function(fn) {
+  return function(x) {
+    if (_.has(globalCache, x)) {
+      return globalCache[x];
+    } else {
+      var value = fn(x);
+      _.assign(globalCache, _.zipObject([x], [value]));
+      return value;
+    }
+  }
+};
+
+
+var addEndMarker = function(words) {
+  return words.concat(['$']);
+};
+
+var removeEndMarker = function(words) {
+  if ((words.length === 0) || (words[words.length - 1] !== '$')) {
+    return words;
+  }
+  return words.slice(0, words.length - 1);
+};
+
+
+var wordsToString = function(words) {
+  return removeEndMarker(words).join(' ');
+};
+
+var stringToWords = function(s) {
+  return addEndMarker(s.split(' '));
+};
+
+
+// --------------------------------------------------------------------
+// Settings
+
+var sentenceStateDim = 30;
+var dialogStateDim = 30;
+
+var makeModelParam = param;
+
+
+// --------------------------------------------------------------------
+// Load babi dialog task 1 data
+
+var parseLine = function(rawLine) {
+  var i = rawLine.indexOf(' ');  // Remove line index
+  var line = rawLine.slice(i + 1);
+  var utterances = line.split('\t');
+  assert.equal(utterances.length, 2);
+  return utterances;
+}
+
+var parseDialog = function(rawDialog) {
+  var rawLines = rawDialog.split('\n');
+  return map(parseLine, rawLines);
+};
+
+var load = function(fn) {
+  var raw = fs.read(fn).trim();
+  return map(parseDialog, raw.split('\n\n'));
+}
+
+var trainingData = load('/data/neural-nets/data/dialog-babi-task1/dialog-babi-task1-API-calls-trn.txt');
+
+var devData = load('/data/neural-nets/data/dialog-babi-task1/dialog-babi-task1-API-calls-dev.txt');
+
+// Note: I'm telling the model about the possible words in the dev data as well!
+var words = _.sortBy(_.uniq(_.flatten(map(stringToWords, _.flattenDeep(_.concat(trainingData, devData)))).concat(['^', '$'])));
+
+var onehotWords = cached(function(word) {
+  var i = _.indexOf(words, word);
+  assert.ok(i != -1, "onehot expected to find word in words, didn't find " + word + " in " + words);
+  var n = words.length;
+  return oneHot(i, n);
+});
+
+
+// --------------------------------------------------------------------
+// Generic encoder/decoder
+
+var makeEncoderStep = function(params) {
+  var net = lstm(params.latentDim, params.name + '-latent', makeModelParam);
+  return function(state, obs) {
+    assert.ok(dims(state)[0] === params.latentDim, 'Previous hidden vector has unexpected dimension');
+    return net(state, obs);
+  };
+};
+
+var makeInitialEncoderState = function(params) {
+  return makeModelParam({
+    name: params.name + '-init',
+    dims: [params.latentDim, 1]
+  });
+};
+
+var makeEncoder = function(params) {
+  var encoderStep = makeEncoderStep(params);
+  var observationToVec = params.observationToVec || identity;
+  var encoder = function(observations, maybeState) {
+    var state = maybeState || makeInitialEncoderState(params);
+    if (observations.length === 0) {
+      return state;
+    } else {
+      var nextState = encoderStep(state, observationToVec(observations[0]));
+      return encoder(observations.slice(1), nextState);
+    }
+  };
+  return encoder;
+};
+
+var makeDecoderStep = function(params) {
+  var net = lstm(params.latentDim, params.name + '-latent', makeModelParam);
+  var out = stack([softmax, affine(params.outputDim, params.name + '-out', makeModelParam), concat]);
+  var outputToVec = params.outputToVec;
+  return function(output, state) {
+    var outputVec = outputToVec(output);
+    assert.ok(dims(outputVec)[0] === params.outputDim, 'Previous output vector has unexpected dimension');
+    assert.ok(dims(state)[0] === params.latentDim, 'Previous hidden vector has unexpected dimension');
+    var nextState = net(state, outputVec);
+    var ps = out([nextState, outputVec]);
+    return { ps, state: nextState };
+  }
+};
+
+var makeDecoder = function(params) {  // { maxSteps }
+  var decoderStep = makeDecoderStep(_.assign({}, params, { outputDim: params.supportedOutputs.length }));
+  var decoder = function(opts) {  // { state, n, generatedOutputs, observedOutputs, useObservations }
+    var state = opts.state;
+    var n = opts.n || 0;
+    var generatedOutputs = opts.generatedOutputs || ['^'];
+    var observedOutputs = opts.observedOutputs;
+    var prevOutput = _.last(generatedOutputs);
+    if ((n === (params.maxSteps + 2)) || (prevOutput === '$')) {
+      // We're not slicing off the terminal symbol since we'd like to know which
+      // outputs were terminated by the maxSteps constraint, and which were terminated
+      // by the decoder net
+      return generatedOutputs.slice(1);
+    } else {
+      var tmp = decoderStep(prevOutput, state);
+      var nextState = tmp.state;
+      var ps = tmp.ps;
+      var observedOutput = observedOutputs ? observedOutputs[0] : undefined;
+      var outputDist = Categorical({ ps, vs: params.supportedOutputs });
+      var generatedOutput = observe(outputDist, opts.useObservations ? observedOutput : undefined);
+      return decoder({
+        state: nextState,
+        n: n + 1,
+        generatedOutputs: generatedOutputs.concat([generatedOutput]),
+        observedOutputs: observedOutputs ? observedOutputs.slice(1) : undefined,
+        useObservations: opts.useObservations
+      });
+    }
+  };
+  return decoder;
+};
+
+
+// --------------------------------------------------------------------
+// Model definition
+
+var sentenceEncoder = makeEncoder({
+  name: 'sentence-encoder',
+  latentDim: sentenceStateDim,
+  observationToVec: onehotWords
+});
+
+var dialogEncoderStep = makeEncoderStep({
+  name: 'dialog-encoder',
+  latentDim: dialogStateDim
+});
+
+var sentenceDecoder = makeDecoder({
+  name: 'sentence-decoder',
+  maxSteps: 10,
+  latentDim: sentenceStateDim,
+  outputToVec: onehotWords,
+  supportedOutputs: words
+});
+
+var projectDialogToSentenceState = stack([
+  tanh,
+  affine(sentenceStateDim, 'project-d2s', makeModelParam)
+]);
+
+var makeInitialDialogState = function() {
+  return makeModelParam({
+    name: 'dialog-init',
+    dims: [dialogStateDim, 1]
+  });
+}
+
+var runModel = function(params) { // { data, batchSize, useObservations }
+
+  mapData(_.pick(params, ['data', 'batchSize']), function(datum) {
+
+    var initialDialogState = makeInitialDialogState();
+
+    reduceLeft(function(prevDialogState, exchange) {
+
+      var utterance = stringToWords(exchange[0]);
+      var utteranceVec = sentenceEncoder(utterance);      
+
+      var midDialogState = dialogEncoderStep(prevDialogState, utteranceVec);
+      var decoderInitialState = projectDialogToSentenceState(midDialogState);
+
+      var trueResponse = stringToWords(exchange[1]);
+      var modelResponse = sentenceDecoder({
+        state: decoderInitialState,
+        observedOutputs: trueResponse,
+        useObservations: params.useObservations
+      });
+
+      var responseVec = sentenceEncoder(modelResponse);
+      var dialogState = dialogEncoderStep(midDialogState, responseVec);
+
+      if (params.callbackOnExchange) {
+        var callback = params.callbackOnExchange;
+        callback({ utterance, trueResponse, modelResponse });
+      }      
+
+      return dialogState;
+
+    }, initialDialogState, datum);
+
+    if (params.callbackOnDialog) {
+      var callback = params.callbackOnDialog;
+      callback();
+    }    
+    
+  });
+  
+};
+
+
+// --------------------------------------------------------------------
+// Optimization and evaluation
+
+var doOptimize = function() {
+  Optimize({
+    model() {
+      return runModel({
+        data: trainingData,
+        useObservations: true,
+        batchSize: 1 // 20
+      });
+    },
+    steps: 100,
+    optMethod: { adam: { stepSize: .01 }}
+  });
+};
+
+var showModelBehavior = function() {
+  Infer({
+    method: 'forward',
+    model() {
+      return runModel({
+        data: devData.slice(0, 1),
+        callbackOnExchange(params) {  // utterance, trueResponse, modelResponse
+          var log = function(label, words) { console.log(label + ': ', wordsToString(words)); }
+          log('Input', params.utterance);
+          log('True response', params.trueResponse);
+          log('Model response', params.modelResponse);
+          console.log()
+        }
+      });
+    }
+  });
+};
+
+var getHeldOutLogLikelihood = function() {
+  var stats = Infer({
+    method: 'SMC',
+    particles: 1,
+    model() {
+      return runModel({ data: devData.slice(0, 10), useObservations: true });
+    }
+  });
+  return stats.normalizationConstant;
+};
+
+
+repeat(100, function() {
+  doOptimize();
+  showModelBehavior();
+  console.log('Held-out log-likelihood:', getHeldOutLogLikelihood());
+  console.log('--------------------------------------------------------------------\n');
+});
+
+
+'done'
