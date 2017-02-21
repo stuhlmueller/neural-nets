@@ -17,22 +17,6 @@ var observe = function(dist, val) {
 };
 
 
-_.defaults(global, { webpplCache: {} });
-
-var globalCache = global.webpplCache;
-
-var cached = function(fn) {
-  return function(x) {
-    if (_.has(globalCache, x)) {
-      return globalCache[x];
-    } else {
-      var value = fn(x);
-      _.assign(globalCache, _.zipObject([x], [value]));
-      return value;
-    }
-  }
-};
-
 var addTerminal = function(xs) {
   return xs.concat(['$']);
 }
@@ -41,7 +25,7 @@ var addTerminal = function(xs) {
 // --------------------------------------------------------------------
 // Data and model
 
-var latentDim = 10;
+var latentDim = 5;
 
 // patterns: [0, 0, 0], [1, 1, 1], [2, 2, 2], [0, 1, 2], [2, 1, 0]
 var data = map(addTerminal, [
@@ -59,7 +43,7 @@ var data = map(addTerminal, [
 
 var alphabet = _.sortBy(_.uniq(_.flatten(data).concat(['^', '$'])));
 
-var onehotAlphabet = cached(function(letter) {
+var onehotAlphabet = cache(function(letter) {
   var i = _.indexOf(alphabet, letter);
   assert.ok(i != -1, "onehot expected to find letter in alphabet, didn't find " + letter + " in " + alphabet);
   var n = alphabet.length;
@@ -142,7 +126,7 @@ var decoder = makeDecoder(6);
 Optimize({
   model() {
     mapData({ data }, function(datum) {
-      var state = encoder(datum);
+      var state = encoder(datum); // [0, 1, 2...]
       decoder({ state, remainingSeq: datum });
     });    
   },

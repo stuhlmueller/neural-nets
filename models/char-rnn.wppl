@@ -18,23 +18,6 @@ var observe = function(dist, val) {
 };
 
 
-_.defaults(global, { webpplCache: {} });
-
-var globalCache = global.webpplCache;
-
-var cached = function(fn) {
-  return function(x) {
-    if (_.has(globalCache, x)) {
-      return globalCache[x];
-    } else {
-      var value = fn(x);
-      _.assign(globalCache, _.zipObject([x], [value]));
-      return value;
-    }
-  }
-}
-
-
 // --------------------------------------------------------------------
 // Data and model
 
@@ -51,7 +34,7 @@ var alphabetDim = alphabet.length;
 
 var latentDim = 10;
 
-var onehotAlphabet = cached(function(letter) {
+var onehotAlphabet = cache(function(letter) {
   var i = _.indexOf(alphabet, letter);
   assert.ok(i != -1, "onehot expected to find letter in alphabet, didn't find " + letter + " in " + alphabet);
   var n = alphabet.length;

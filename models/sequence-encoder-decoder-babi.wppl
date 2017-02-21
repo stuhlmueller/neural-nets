@@ -38,23 +38,6 @@ var observe = function(dist, val) {
 };
 
 
-_.defaults(global, { webpplCache: {} });
-
-var globalCache = global.webpplCache;
-
-var cached = function(fn) {
-  return function(x) {
-    if (_.has(globalCache, x)) {
-      return globalCache[x];
-    } else {
-      var value = fn(x);
-      _.assign(globalCache, _.zipObject([x], [value]));
-      return value;
-    }
-  }
-};
-
-
 var addEndMarker = function(words) {
   return words.concat(['$']);
 };
@@ -97,9 +80,9 @@ var load = function(fn) {
   return map(parseDialog, raw.split('\n\n'));
 }
 
-var trainingData = load('/data/neural-nets/data/dialog-babi-task1/dialog-babi-task1-API-calls-trn.txt');
+var trainingData = load('/projects/Stanford/neural-nets/data/dialog-babi-task1/dialog-babi-task1-API-calls-trn.txt');
 
-var devData = load('/data/neural-nets/data/dialog-babi-task1/dialog-babi-task1-API-calls-dev.txt').slice(0, 10);
+var devData = load('/projects/Stanford/neural-nets/data/dialog-babi-task1/dialog-babi-task1-API-calls-dev.txt').slice(0, 10);
 
 // Note: I'm telling the model about the possible words in the dev data as well!
 var words = _.sortBy(_.uniq(_.flatten(map(stringToWords, _.flattenDeep(_.concat(trainingData, devData)))).concat(['^', '$'])));
@@ -110,7 +93,7 @@ var words = _.sortBy(_.uniq(_.flatten(map(stringToWords, _.flattenDeep(_.concat(
 
 var latentDim = 30;
 
-var onehotWords = cached(function(word) {
+var onehotWords = cache(function(word) {
   var i = _.indexOf(words, word);
   assert.ok(i != -1, "onehot expected to find word in words, didn't find " + word + " in " + words);
   var n = words.length;
