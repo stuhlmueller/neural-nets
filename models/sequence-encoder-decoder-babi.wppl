@@ -29,11 +29,7 @@ var observe = function(dist, val) {
     factor(dist.score(val));
     return val;
   } else {
-    return sample(dist, {
-      guide() {
-        return dist; // prevent auto-guide in Forward; always use model dist
-      }
-    });
+    return sample(dist, { noAutoGuide: true });
   }
 };
 
