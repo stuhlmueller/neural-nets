@@ -1,0 +1,267 @@
+// Inspired by "Generating Sentences from a Continuous Space",
+// Samuel R. Bowman, Luke Vilnis, Oriol Vinyals, Andrew M. Dai, Rafal Jozefowicz & Samy Bengio
+
+
+// --------------------------------------------------------------------
+// Helpers
+
+var second = function(x) { return x[1]; };
+
+var reduceLeft = function(f, init, arr) {
+  // if (arr.length > 0) {
+  //   return reduceLeft(f, f(init, arr[0]), rest(arr));
+  // } else {
+  //   return init;
+  // }
+  var helper = function(i, init) {
+    if (i < arr.length) {
+      return helper(i + 1, f(init, arr[i]));
+    } else {
+      return init;
+    }
+  };
+  return helper(0, init);
+};
+
+
+var observe = function(dist, val) {
+  if (val !== undefined) {
+    factor(dist.score(val));
+    return val;
+  } else {
+    return sample(dist, { guide() {
+      return dist;
+    }});
+  }
+};
+
+
+var addEndMarker = function(words) {
+  return words.concat(['$']);
+};
+
+var removeEndMarker = function(words) {
+  if ((words.length === 0) || (words[words.length - 1] !== '$')) {
+    return words;
+  }
+  return words.slice(0, words.length - 1);
+};
+
+
+var wordsToString = function(words) {
+  return removeEndMarker(words).join(' ');
+};
+
+var stringToWords = function(s) {
+  return addEndMarker(s.split(' '));
+};
+
+
+// --------------------------------------------------------------------
+// Load babi dialog task 1 data
+
+var dataToAlphabet = function(data) {
+  return _.sortBy(_.uniq(_.flatten(map(stringToWords, _.flattenDeep(data))).concat(['^', '$'])));
+};
+
+var parseLine = function(rawLine) {
+  var i = rawLine.indexOf(' ');  // Remove line index
+  var line = rawLine.slice(i + 1);
+  var utterances = line.split('\t');
+  assert.equal(utterances.length, 2);
+  return utterances;
+}
+
+var parseDialog = function(rawDialog) {
+  var rawLines = rawDialog.split('\n');
+  return map(parseLine, rawLines);
+};
+
+var load = function(fn) {
+  var raw = fs.read(fn).trim();
+  return map(parseDialog, raw.split('\n\n'));
+}
+
+// var trainingData = load('/projects/Stanford/neural-nets/data/dialog-babi-task1/dialog-babi-task1-API-calls-trn.txt');
+// 
+// var devData = load('/projects/Stanford/neural-nets/data/dialog-babi-task1/dialog-babi-task1-API-calls-dev.txt').slice(0, 10);
+// 
+// // Note: I'm telling the model about the possible words in the dev data as well!
+// var words = dataToAlphabet(_.concat(trainingData, devData));
+
+
+// --------------------------------------------------------------------
+// Toy dataset
+
+var dataStrings = [
+  '0000000000010001000000100000000',
+  '0000010010000000100000010000000',
+  '0100001110111011011110000111112',  
+  '0000001111111011111110000111111',
+  '1112222222000012111211222222211',  
+  '1112222222000011111111222222211',
+  '2222222333333322333333334444444',
+  '2222222332233322333333334443344',  
+  '3333332333333322334444444555555',
+  '4444555554444433444444455556666'
+];
+
+var words = _.uniq(_.join(dataStrings, '').concat(['^', '$', 'extra']));
+var data = map(function(s){ return s.split(''); }, dataStrings);
+
+    
+// --------------------------------------------------------------------
+// Encoder + decoder
+
+var latentDim = 30;
+
+var onehotWords = cache(function(word) {
+  var i = _.indexOf(words, word);
+  assert.ok(i != -1, "onehot expected to find word in words, didn't find " + word + " in " + words);
+  var n = words.length;
+  return oneHot(i, n);
+});
+
+var makeModelParam = param;  // no regularization
+
+var makeEncoderStep = function() {
+  var encoderNet = lstm(latentDim, 'encoder-net', makeModelParam);
+  return function(prevState, word) {
+    assert.ok(dims(prevState)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
+    var nextState = encoderNet(prevState, onehotWords(word));
+    return nextState;
+  };
+};
+
+var makeInitialEncoderState = function() {
+  return makeModelParam({ name: 'encoder-init', dims: [latentDim, 1] });
+};
+
+// Encoder repeats encoder step until input is completely digested
+var makeEncoder = function() {
+  var encoderStep = makeEncoderStep();
+  var encoder = function(words, maybeState) {    
+    var state = maybeState || makeInitialEncoderState();
+    if (words.length === 0) {
+      return state;
+    } else {
+      var nextState = encoderStep(state, words[0]);
+      return encoder(words.slice(1), nextState);
+    }
+  };
+  return encoder;
+};
+
+var makeDecoderStep = function() {
+  var decoderNetLatent = lstm(latentDim, 'decoder-net-latent', makeModelParam);
+  var decoderNetOutput = stack([softmax, affine(words.length, 'decoder-net-output', makeModelParam), concat]);
+  return function(prevWord, state) {
+    assert.ok(dims(state)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
+    var wordVec = onehotWords(prevWord);
+    var nextState = decoderNetLatent(state, wordVec);
+    var ps = decoderNetOutput([nextState, wordVec]);
+    return { ps, state: nextState }
+  };
+};
+
+// Decoder repeats decoder step until terminal symbol is observed or max length is exceeded
+
+var makeDecoder = function(maxWords) {
+  var decoderStep = makeDecoderStep();
+  var decoder = function(opts) {
+    var state = opts.state;
+    var n = opts.n || 0;
+    var generatedObservations = opts.generatedObservations || ['^'];
+    var trueObservations = opts.trueObservations;
+    var prevWord = _.last(generatedObservations);
+    if ((n === (maxWords + 2)) || (prevWord === '$')) {
+      // We're not slicing off the terminal symbol since we'd like to know which
+      // strings were terminated by the maxWords constrained, and which self-terminated
+      return generatedObservations.slice(1);
+    } else {
+      var tmp = decoderStep(prevWord, state);
+      var nextState = tmp.state;
+      var ps = tmp.ps;
+      var observedWord = trueObservations ? trueObservations[0] : undefined;
+      var wordDist = Categorical({ ps, vs: words });
+      var generatedWord = observe(wordDist, opts.useObservations ? observedWord : undefined);
+      return decoder({
+        state: nextState,
+        n: n + 1,
+        generatedObservations: generatedObservations.concat([generatedWord]),
+        trueObservations: trueObservations ? trueObservations.slice(1) : undefined,
+        useObservations: opts.useObservations
+      });
+    }
+  };
+  return decoder;
+};
+
+
+// --------------------------------------------------------------------
+// Main
+
+var encoder = makeEncoder();
+
+var decoder = makeDecoder(29);  // doesn't correctly learn to terminate on its own
+
+var runModel = function(options) {
+  // options: { data, useObservations, callback, batchSize }
+  
+  mapData({ data: options.data, batchSize: options.batchSize }, function(datum) {
+
+    var initialEncoderState = makeInitialEncoderState();  // <- fold this into encoder?
+    var state = encoder(datum, initialEncoderState);
+    var recoveredDatum = decoder({
+      state,
+      trueObservations: datum,
+      useObservations: options.useObservations
+    });
+
+    if (options.callback) {
+      var callback = options.callback;
+      callback({ datum, recoveredDatum });
+    }
+
+  });
+  
+};
+
+
+var doOptimize = function() {
+  Optimize({
+    model() {
+      return runModel({
+        data,
+        useObservations: true,
+        batchSize: 1 // 20
+      });
+    },
+    steps: 100,
+    optMethod: { adam: { stepSize: .01 }}
+  });
+};
+
+
+var showModelBehavior = function() {
+  Infer({
+    method: 'forward',
+    model() {
+      return runModel({
+        data,
+        callback(params) {  // datum, recoveredDatum
+          var log = function(label, words) { console.log(label + ': ', wordsToString(words)); }
+          log('Datum:     ', params.datum);
+          log('Recovered: ', params.recoveredDatum);
+          console.log()
+        }
+      });
+    }
+  });
+};
+
+
+repeat(10, function() {
+  showModelBehavior();
+  doOptimize();  
+});
