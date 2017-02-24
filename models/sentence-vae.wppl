@@ -122,10 +122,8 @@ var onehotWords = cache(function(word) {
   return oneHot(i, n);
 });
 
-var makeModelParam = param;  // no regularization
-
 var makeEncoderStep = function() {
-  var encoderNet = lstm(latentDim, 'encoder-net', makeModelParam);
+  var encoderNet = lstm(latentDim, 'encoder-net', param);
   return function(prevState, word) {
     assert.ok(dims(prevState)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
     var nextState = encoderNet(prevState, onehotWords(word));
@@ -134,7 +132,7 @@ var makeEncoderStep = function() {
 };
 
 var makeInitialEncoderState = function() {
-  return makeModelParam({ name: 'encoder-init', dims: [latentDim, 1] });
+  return param({ name: 'encoder-init', dims: [latentDim, 1] });
 };
 
 // Encoder repeats encoder step until input is completely digested
@@ -153,8 +151,8 @@ var makeEncoder = function() {
 };
 
 var makeDecoderStep = function() {
-  var decoderNetLatent = lstm(latentDim, 'decoder-net-latent', makeModelParam);
-  var decoderNetOutput = stack([softmax, affine(words.length, 'decoder-net-output', makeModelParam), concat]);
+  var decoderNetLatent = lstm(latentDim, 'decoder-net-latent', param);
+  var decoderNetOutput = stack([softmax, affine(words.length, 'decoder-net-output', param), concat]);
   return function(prevWord, state) {
     assert.ok(dims(state)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
     var wordVec = onehotWords(prevWord);
@@ -184,7 +182,7 @@ var makeDecoder = function(maxWords) {
       var ps = tmp.ps;
       var observedWord = trueObservations ? trueObservations[0] : undefined;
       var wordDist = Categorical({ ps, vs: words });
-      var generatedWord = observe(wordDist, opts.useObservations ? observedWord : undefined);
+      var generatedWord = observe(wordDist, opts.useObservations ? observedWord : undefined);  // FIXME: make sure i don't generate auto-guide here
       return decoder({
         state: nextState,
         n: n + 1,
@@ -205,13 +203,57 @@ var encoder = makeEncoder();
 
 var decoder = makeDecoder(29);  // doesn't correctly learn to terminate on its own
 
+var eye = function(dim) {
+  var v = Vector(_.flatten(
+    mapN(function(i){
+      mapN(function(j){
+        return (i === j) ? 1 : 0;
+      }, dim)
+    }, dim)));
+  var m = T.reshape(v, [dim, dim]);
+  return m;
+};
+
+var makePositiveSemiDefinite = function(m) {
+  var dim = dims(m)[0];
+  return T.add(T.div(T.add(m, T.transpose(m)), 2), T.mul(eye(dim), dim));
+};
+
+var reshapeToSquareMatrix = function(v) {
+  var dimSquared = dims(v)[0];
+  var dim = Math.sqrt(dimSquared);
+  return T.reshape(v, [dim, dim]);
+}
+
+
 var runModel = function(options) {
   // options: { data, useObservations, callback, batchSize }
+
+  guide(function(){
+    globalStore.muNet = stack([tanh, affine(latentDim, 'mu-net', param)]);
+    globalStore.covNet = stack([tanh, affine(latentDim*latentDim, 'cov-net', param)]);
+  })
   
   mapData({ data: options.data, batchSize: options.batchSize }, function(datum) {
 
-    var initialEncoderState = makeInitialEncoderState();  // <- fold this into encoder?
-    var state = encoder(datum, initialEncoderState);
+    var priorParams = {
+      mu: 0,
+      sigma: 1,
+      dims: [latentDim, 1]
+    };
+
+    var state = sample(TensorGaussian(priorParams), {
+      guide() {
+        var state = encoder(datum);
+        var muNet = globalStore.muNet;
+        var mu = muNet(state);
+        var covNet = globalStore.covNet;
+        var covVec = covNet(state);
+        var cov = makePositiveSemiDefinite(reshapeToSquareMatrix(covVec));
+        return MultivariateGaussian({ mu, cov });
+      }
+    });
+    
     var recoveredDatum = decoder({
       state,
       trueObservations: datum,
@@ -224,7 +266,6 @@ var runModel = function(options) {
     }
 
   });
-  
 };
 
 
@@ -234,7 +275,7 @@ var doOptimize = function() {
       return runModel({
         data,
         useObservations: true,
-        batchSize: 1 // 20
+        batchSize: 1
       });
     },
     steps: 100,
@@ -243,9 +284,25 @@ var doOptimize = function() {
 };
 
 
+var doDream = function() {
+  Optimize({
+    model() {
+      return runModel({
+        data,
+        useObservations: true
+      });
+    },
+    steps: 100,
+    optMethod: { adam: { stepSize: .01 }},
+    estimator: 'dream'
+  });
+}
+
+
 var showModelBehavior = function() {
   Infer({
     method: 'forward',
+    guide: true, /////////
     model() {
       return runModel({
         data,
@@ -253,7 +310,7 @@ var showModelBehavior = function() {
           var log = function(label, words) { console.log(label + ': ', wordsToString(words)); }
           log('Datum:     ', params.datum);
           log('Recovered: ', params.recoveredDatum);
-          console.log()
+          console.log();
         }
       });
     }
@@ -261,7 +318,8 @@ var showModelBehavior = function() {
 };
 
 
-repeat(10, function() {
+repeat(100, function() {
   showModelBehavior();
-  doOptimize();  
+  doOptimize();
+//  doDream();
 });
