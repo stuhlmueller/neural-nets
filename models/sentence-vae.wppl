@@ -57,20 +57,42 @@ var stringToWords = function(s) {
 };
 
 
+var makePositiveSemiDefinite = function(m) {
+  var dim = dims(m)[0];
+  return T.add(T.div(T.add(m, T.transpose(m)), 2), T.mul(idMatrix(dim), dim));
+};
+
+var reshapeToSquareMatrix = function(v) {
+  var dimSquared = dims(v)[0];
+  var dim = Math.sqrt(dimSquared);
+  return T.reshape(v, [dim, dim]);
+};
+
+
 // --------------------------------------------------------------------
 // Toy dataset
 
 var dataStrings = [
   '0000000000010001000000100000000',
-  '0000010010000000100000010000000',
-  '0100001110111011011110000111112',  
+  '0000001101111011111110000111111',
   '0000001111111011111110000111111',
-  '1112222222000012111211222222211',  
+  '0000010010000000100000010000000',
+  '0000010010010000001000010000000',
+  '0001000000010001000000000000000',
+  '0100001110111011011110000111112',  
+  '0101011110111011001110000111112',  
+  '1112202222020012111211222222211',  
   '1112222222000011111111222222211',
-  '2222222333333322333333334444444',
+  '1112222222000012111211222222211',  
+  '1112222222010011111121222222211',
   '2222222332233322333333334443344',  
+  '2222222333333322333333334444444',
+  '2223222332333322333333334444444',
+  '2322222332233322333433334443344',  
+  '3333232333333322434444444545555',
   '3333332333333322334444444555555',
-  '4444555554444433444444455556666'
+  '4444555554444433444444455556666',
+  '4454555554444433444544455556666'
 ];
 
 var words = _.uniq(_.join(dataStrings, '').concat(['^', '$', 'extra']));
@@ -146,18 +168,6 @@ var decoder = function(opts) {
 // --------------------------------------------------------------------
 // Main
 
-var makePositiveSemiDefinite = function(m) {
-  var dim = dims(m)[0];
-  return T.add(T.div(T.add(m, T.transpose(m)), 2), T.mul(idMatrix(dim), dim));
-};
-
-var reshapeToSquareMatrix = function(v) {
-  var dimSquared = dims(v)[0];
-  var dim = Math.sqrt(dimSquared);
-  return T.reshape(v, [dim, dim]);
-}
-
-
 var runModel = function(options) {
   // options: { data, useObservations, callback, batchSize }
 
@@ -165,14 +175,14 @@ var runModel = function(options) {
     globalStore.muNet = stack([tanh, affine(latentDim, 'mu-net', param)]);
     globalStore.covNet = stack([tanh, affine(latentDim*latentDim, 'cov-net', param)]);
   })
+
+  var priorParams = {
+    mu: 0,
+    sigma: 1,
+    dims: [latentDim, 1]
+  };
   
   mapData({ data: options.data, batchSize: options.batchSize }, function(datum) {
-
-    var priorParams = {
-      mu: 0,
-      sigma: 1,
-      dims: [latentDim, 1]
-    };
 
     var state = sample(TensorGaussian(priorParams), {
       guide() {
@@ -234,7 +244,7 @@ var doDream = function() {
 var showModelBehavior = function() {
   Infer({
     method: 'forward',
-    guide: true, /////////
+    guide: true,
     model() {
       return runModel({
         data,
