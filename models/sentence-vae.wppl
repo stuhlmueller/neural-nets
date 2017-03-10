@@ -146,20 +146,9 @@ var decoder = function(opts) {
 // --------------------------------------------------------------------
 // Main
 
-var eye = function(dim) {
-  var v = Vector(_.flatten(
-    mapN(function(i){
-      mapN(function(j){
-        return (i === j) ? 1 : 0;
-      }, dim)
-    }, dim)));
-  var m = T.reshape(v, [dim, dim]);
-  return m;
-};
-
 var makePositiveSemiDefinite = function(m) {
   var dim = dims(m)[0];
-  return T.add(T.div(T.add(m, T.transpose(m)), 2), T.mul(eye(dim), dim));
+  return T.add(T.div(T.add(m, T.transpose(m)), 2), T.mul(idMatrix(dim), dim));
 };
 
 var reshapeToSquareMatrix = function(v) {
