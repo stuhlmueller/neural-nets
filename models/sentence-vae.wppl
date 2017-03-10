@@ -58,39 +58,6 @@ var stringToWords = function(s) {
 
 
 // --------------------------------------------------------------------
-// Load babi dialog task 1 data
-
-var dataToAlphabet = function(data) {
-  return _.sortBy(_.uniq(_.flatten(map(stringToWords, _.flattenDeep(data))).concat(['^', '$'])));
-};
-
-var parseLine = function(rawLine) {
-  var i = rawLine.indexOf(' ');  // Remove line index
-  var line = rawLine.slice(i + 1);
-  var utterances = line.split('\t');
-  assert.equal(utterances.length, 2);
-  return utterances;
-}
-
-var parseDialog = function(rawDialog) {
-  var rawLines = rawDialog.split('\n');
-  return map(parseLine, rawLines);
-};
-
-var load = function(fn) {
-  var raw = fs.read(fn).trim();
-  return map(parseDialog, raw.split('\n\n'));
-}
-
-// var trainingData = load('/projects/Stanford/neural-nets/data/dialog-babi-task1/dialog-babi-task1-API-calls-trn.txt');
-// 
-// var devData = load('/projects/Stanford/neural-nets/data/dialog-babi-task1/dialog-babi-task1-API-calls-dev.txt').slice(0, 10);
-// 
-// // Note: I'm telling the model about the possible words in the dev data as well!
-// var words = dataToAlphabet(_.concat(trainingData, devData));
-
-
-// --------------------------------------------------------------------
 // Toy dataset
 
 var dataStrings = [
