@@ -151,7 +151,7 @@ var decoder = function(opts) {
     var prevWordVec = onehotWords(prevWord);
     var nextState = decoderNetLatent(state, prevWordVec);
     var ps = decoderNetOutput([nextState, prevWordVec]);
-    var observedWord = trueObservations ? trueObservations[0] : undefined;
+    var observedWord = trueObservations ? trueObservations[0] : 'extra';
     var wordDist = Categorical({ ps, vs: words });
     var generatedWord = observe(wordDist, opts.useObservations ? observedWord : undefined);  // FIXME: make sure i don't generate auto-guide here
     return decoder({
