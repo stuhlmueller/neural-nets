@@ -217,10 +217,10 @@ var doOptimize = function() {
       return runModel({
         data,
         useObservations: true,
-        batchSize: 1
+        batchSize: 5
       });
     },
-    steps: 100,
+    steps: 100000,
     optMethod: { adam: { stepSize: .01 }}
   });
 };
@@ -260,11 +260,17 @@ var showModelBehavior = function() {
 };
 
 
-repeat(100, function() {
-  showModelBehavior();
-  doOptimize();
-//  doDream();
-});
+var main = function() {
+  var cmd = process.argv[process.argv.length - 1];
+  if (cmd === '--optimize') {
+    doOptimize();
+  } else {
+    showModelBehavior();
+  }
+};
+
+
+main();
 
 
 // ...
