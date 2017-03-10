@@ -76,12 +76,6 @@ var dataStrings = [
 var words = _.uniq(_.join(dataStrings, '').concat(['^', '$', 'extra']));
 var data = map(function(s){ return s.split(''); }, dataStrings);
 
-    
-// --------------------------------------------------------------------
-// Encoder + decoder
-
-var latentDim = 30;
-
 var onehotWords = cache(function(word) {
   var i = _.indexOf(words, word);
   assert.ok(i != -1, "onehot expected to find word in words, didn't find " + word + " in " + words);
@@ -89,86 +83,68 @@ var onehotWords = cache(function(word) {
   return oneHot(i, n);
 });
 
-var makeEncoderStep = function() {
-  var encoderNet = lstm(latentDim, 'encoder-net', param);
-  return function(prevState, word) {
-    assert.ok(dims(prevState)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
-    var nextState = encoderNet(prevState, onehotWords(word));
-    return nextState;
-  };
-};
+
+// --------------------------------------------------------------------
+// Encoder + decoder
+
+var latentDim = 30;
+var maxWords = 29;
+
+
+// Encoder repeats encoder step until input is completely digested
+
+var encoderNet = lstm(latentDim, 'encoder-net', param);
 
 var makeInitialEncoderState = function() {
   return param({ name: 'encoder-init', dims: [latentDim, 1] });
 };
 
-// Encoder repeats encoder step until input is completely digested
-var makeEncoder = function() {
-  var encoderStep = makeEncoderStep();
-  var encoder = function(words, maybeState) {    
-    var state = maybeState || makeInitialEncoderState();
-    if (words.length === 0) {
-      return state;
-    } else {
-      var nextState = encoderStep(state, words[0]);
-      return encoder(words.slice(1), nextState);
-    }
-  };
-  return encoder;
+var encoder = function(words, maybeState) {
+  var state = maybeState || makeInitialEncoderState();
+  if (words.length === 0) {
+    return state;
+  } else {
+    var nextState = encoderNet(state, onehotWords(words[0]));
+    return encoder(words.slice(1), nextState);
+  }
 };
 
-var makeDecoderStep = function() {
-  var decoderNetLatent = lstm(latentDim, 'decoder-net-latent', param);
-  var decoderNetOutput = stack([softmax, affine(words.length, 'decoder-net-output', param), concat]);
-  return function(prevWord, state) {
-    assert.ok(dims(state)[0] === latentDim, 'Previous hidden vector has unexpected dimension');
-    var wordVec = onehotWords(prevWord);
-    var nextState = decoderNetLatent(state, wordVec);
-    var ps = decoderNetOutput([nextState, wordVec]);
-    return { ps, state: nextState }
-  };
-};
 
 // Decoder repeats decoder step until terminal symbol is observed or max length is exceeded
 
-var makeDecoder = function(maxWords) {
-  var decoderStep = makeDecoderStep();
-  var decoder = function(opts) {
-    var state = opts.state;
-    var n = opts.n || 0;
-    var generatedObservations = opts.generatedObservations || ['^'];
-    var trueObservations = opts.trueObservations;
-    var prevWord = _.last(generatedObservations);
-    if ((n === (maxWords + 2)) || (prevWord === '$')) {
-      // We're not slicing off the terminal symbol since we'd like to know which
-      // strings were terminated by the maxWords constrained, and which self-terminated
-      return generatedObservations.slice(1);
-    } else {
-      var tmp = decoderStep(prevWord, state);
-      var nextState = tmp.state;
-      var ps = tmp.ps;
-      var observedWord = trueObservations ? trueObservations[0] : undefined;
-      var wordDist = Categorical({ ps, vs: words });
-      var generatedWord = observe(wordDist, opts.useObservations ? observedWord : undefined);  // FIXME: make sure i don't generate auto-guide here
-      return decoder({
-        state: nextState,
-        n: n + 1,
-        generatedObservations: generatedObservations.concat([generatedWord]),
-        trueObservations: trueObservations ? trueObservations.slice(1) : undefined,
-        useObservations: opts.useObservations
-      });
-    }
-  };
-  return decoder;
+var decoderNetLatent = lstm(latentDim, 'decoder-net-latent', param);
+var decoderNetOutput = stack([softmax, affine(words.length, 'decoder-net-output', param), concat]);
+
+var decoder = function(opts) {
+  var state = opts.state;
+  var n = opts.n || 0;
+  var generatedObservations = opts.generatedObservations || ['^'];
+  var trueObservations = opts.trueObservations;
+  var prevWord = _.last(generatedObservations);
+  if ((n === (maxWords + 2)) || (prevWord === '$')) {
+    // We're not slicing off the terminal symbol since we'd like to know which
+    // strings were terminated by the maxWords constrained, and which self-terminated
+    return generatedObservations.slice(1);
+  } else {
+    var prevWordVec = onehotWords(prevWord);
+    var nextState = decoderNetLatent(state, prevWordVec);
+    var ps = decoderNetOutput([nextState, prevWordVec]);
+    var observedWord = trueObservations ? trueObservations[0] : undefined;
+    var wordDist = Categorical({ ps, vs: words });
+    var generatedWord = observe(wordDist, opts.useObservations ? observedWord : undefined);  // FIXME: make sure i don't generate auto-guide here
+    return decoder({
+      state: nextState,
+      n: n + 1,
+      generatedObservations: generatedObservations.concat([generatedWord]),
+      trueObservations: trueObservations ? trueObservations.slice(1) : undefined,
+      useObservations: opts.useObservations
+    });
+  }
 };
 
 
 // --------------------------------------------------------------------
 // Main
-
-var encoder = makeEncoder();
-
-var decoder = makeDecoder(29);  // doesn't correctly learn to terminate on its own
 
 var eye = function(dim) {
   var v = Vector(_.flatten(
