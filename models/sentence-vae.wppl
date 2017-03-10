@@ -96,6 +96,8 @@ var dataStrings = [
 ];
 
 var words = _.uniq(_.join(dataStrings, '').concat(['^', '$', 'extra']));
+var words = _.uniq(_.join(dataStrings, '').concat(['^', '$']));
+
 var data = map(function(s){ return s.split(''); }, dataStrings);
 
 var onehotWords = cache(function(word) {
@@ -151,7 +153,7 @@ var decoder = function(opts) {
     var prevWordVec = onehotWords(prevWord);
     var nextState = decoderNetLatent(state, prevWordVec);
     var ps = decoderNetOutput([nextState, prevWordVec]);
-    var observedWord = trueObservations ? trueObservations[0] : 'extra';
+    var observedWord = trueObservations ? trueObservations[0] : '$';
     var wordDist = Categorical({ ps, vs: words });
     var generatedWord = observe(wordDist, opts.useObservations ? observedWord : undefined);  // FIXME: make sure i don't generate auto-guide here
     return decoder({
