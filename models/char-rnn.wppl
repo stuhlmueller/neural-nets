@@ -1,5 +1,8 @@
 // Simple Character RNN
 
+// Note: This file requires an old version fo webppl-nn and may or may not work
+// https://github.com/null-a/webppl-nn/tree/old-interface
+
 
 // --------------------------------------------------------------------
 // Helper functions

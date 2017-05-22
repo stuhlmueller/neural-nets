@@ -1,6 +1,10 @@
 // Inspired by "Generating Sentences from a Continuous Space",
 // Samuel R. Bowman, Luke Vilnis, Oriol Vinyals, Andrew M. Dai, Rafal Jozefowicz & Samy Bengio
 
+// Note: This file requires an old version fo webppl-nn and may or may not work
+// https://github.com/null-a/webppl-nn/tree/old-interface
+
+
 // Run using:
 // ./webppl --require ../webppl-fs/ --require ../webppl-nn/ --param-id vae-x --param-store mongo ../neural-nets/models/sentence-vae.wppl --optimize
 

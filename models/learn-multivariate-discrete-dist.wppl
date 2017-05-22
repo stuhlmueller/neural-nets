@@ -1,5 +1,8 @@
 // Learning a multivariate discrete distribution from data
 
+// Note: This file requires an old version fo webppl-nn and may or may not work
+// https://github.com/null-a/webppl-nn/tree/old-interface
+
 
 // --------------------------------------------------------------------
 // Helpers
