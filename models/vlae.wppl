@@ -1,0 +1,3 @@
+// "Flat" Variational Ladder Auto-Encoder (VLAE)
+
+flip(.5)
