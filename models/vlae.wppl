@@ -1,3 +1,73 @@
 // "Flat" Variational Ladder Auto-Encoder (VLAE)
 
-flip(.5)
+
+// Settings
+
+var dataDim = 5;  // length of vector for each datum
+
+var noiseDim = 3;
+var noiseSize = [noiseDim, 1];
+
+var latentDim = 3;
+var latentSize = [latentDim, 1];
+
+
+// Model
+
+// - could share more params below by ignoring level in net names
+
+var mlp = function(name, dims) {
+  return stack([
+    sigmoid,
+    affine('mlp-' + name + '-l2', { in: dims.in, out: dims.out }),
+    tanh,
+    affine('mlp-' + name + '-l1', { in: dims.in, out: dims.in })
+  ]);
+};
+
+var finalNet = function(state) {  // f_0
+  var net = mlp('final', { in: latentDim, out: dataDim*2 });
+  return net(state);  
+};
+
+var combineNet = function(state, level, noise) {  // f_l
+  var net = mlp('combine-' + level, { in: latentDim + noiseDim, out: latentDim });  // u_l
+  return net(concat([state, initNet(level, noise)]));  
+};
+
+var initNet = function(level, noise) {  // f_L, v_l
+  var net = mlp('init-' + level, { in: noiseDim, out: noiseDim });
+  return net(noise);
+};
+
+var sampleNoise = function(level) {  //  z_l ~ sampleNoise(l)
+  return sample(DiagCovGaussian({
+    mu: zeros(latentSize),
+    sigma: ones(latentSize)
+  }));
+};
+
+var dataDist = function(finalState) {  // r
+  return DiagCovGaussian({  // use more expressive family here?
+    mu: T.range(finalState, 0, dataDim),
+    sigma: softplus(T.range(finalState, dataDim, dataDim*2))
+  })
+};
+
+var recur = function(level, state) {
+  if (level === 0) {
+    return dataDist(finalNet(state));
+  } else {
+    var noise = sampleNoise(level);  // z_l
+    var nextState = combineNet(state, level, noise);  // z_tidle_l
+    return recur(level-1, nextState);
+  }
+};
+
+var model = function(level) {
+  var noise = sampleNoise(level);  // z_L
+  var state = initNet(level, noise);  // z_tilde_L
+  return sample(recur(level-1, state));
+};
+
+model(3);
