@@ -3,12 +3,15 @@
 
 // Settings
 
-var dataDim = 5;  // length of vector for each datum
+var numLevels = 3;  // number of latent levels in hierarchy
+
+var dataDim = 1;  // length of vector for each datum
+var dataSize = [dataDim]
 
 var noiseDim = 3;
 var noiseSize = [noiseDim, 1];
 
-var latentDim = 3;
+var latentDim = 5;
 var latentSize = [latentDim, 1];
 
 
@@ -18,10 +21,10 @@ var latentSize = [latentDim, 1];
 
 var mlp = function(name, dims) {
   return stack([
-    sigmoid,
-    affine('mlp-' + name + '-l2', { in: dims.in, out: dims.out }),
+    // sigmoid,
+    // affine('mlp-' + name + '-l2', { in: dims.in, out: dims.out }),
     tanh,
-    affine('mlp-' + name + '-l1', { in: dims.in, out: dims.in })
+    affine('mlp-' + name + '-l1', { in: dims.in, out: dims.out })
   ]);
 };
 
@@ -31,20 +34,20 @@ var finalNet = function(state) {  // f_0
 };
 
 var combineNet = function(state, level, noise) {  // f_l
-  var net = mlp('combine-' + level, { in: latentDim + noiseDim, out: latentDim });  // u_l
-  return net(concat([state, initNet(level, noise)]));  
+  var net = mlp('combine-' + level, { in: latentDim * 2, out: latentDim });  // u_l
+  return net(concat([state, initNet(level, noise)]));
 };
 
 var initNet = function(level, noise) {  // f_L, v_l
-  var net = mlp('init-' + level, { in: noiseDim, out: noiseDim });
+  var net = mlp('init-' + level, { in: noiseDim, out: latentDim });
   return net(noise);
 };
 
-var sampleNoise = function(level) {  //  z_l ~ sampleNoise(l)
-  return sample(DiagCovGaussian({
-    mu: zeros(latentSize),
-    sigma: ones(latentSize)
-  }));
+var noiseDist = function(level) {  //  z_l ~ sampleNoise(l)
+  return DiagCovGaussian({
+    mu: zeros(noiseSize),
+    sigma: ones(noiseSize)
+  });
 };
 
 var dataDist = function(finalState) {  // r
@@ -58,16 +61,43 @@ var recur = function(level, state) {
   if (level === 0) {
     return dataDist(finalNet(state));
   } else {
-    var noise = sampleNoise(level);  // z_l
+    var noise = sample(noiseDist(level));  // z_l
     var nextState = combineNet(state, level, noise);  // z_tidle_l
     return recur(level-1, nextState);
   }
 };
 
 var model = function(level) {
-  var noise = sampleNoise(level);  // z_L
+  var noise = sample(noiseDist(level));  // z_L
   var state = initNet(level, noise);  // z_tilde_L
-  return sample(recur(level-1, state));
+  return recur(level-1, state);
 };
 
-model(3);
+
+// Training and sampling
+
+Optimize({
+  model() {
+    var dist = model(numLevels);
+    var datum1 = { x: ones(dataSize), y: true }
+    var datum2 = { x: zeros(dataSize), y: true }
+    var datum3 = { x: T.mul(ones(dataSize), 0.5), y: false }
+    mapData({ data: [datum1, datum2, datum3] }, function(datum){
+      if (datum.y) {
+        observe(dist, datum.x);
+      } else {
+        factor(-dist.score(datum.x));  // "unobserve" data point
+      }
+    });
+  },
+  steps: 10000
+});
+
+console.log(JSON.stringify(_.flatten(Infer({
+  model() {
+    var dist = model(numLevels);
+    return T.toScalars(sample(dist));
+  },
+  method: 'forward',
+  samples: 50
+}).support()).sort(), null, 2));
