@@ -1,0 +1,16 @@
+// No parameters to learn
+var model_1 = function() {
+  var u0 = uniform(0, 1);
+  var u = softmax(T.mul(Vector([u0, 1-u0]), 10))
+  var g1 = gaussian(0, .1);
+  var g2 = gaussian(1, .1);
+  return T.toScalars(T.dot(T.transpose(u), Vector([g1, g2])))
+};
+
+console.log(JSON.stringify(_.flatten(Infer({
+  model() {
+    return model();
+  },
+  method: 'forward',
+  samples: 50
+}).support()).sort(), null, 2));
