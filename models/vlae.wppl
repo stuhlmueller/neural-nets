@@ -1,12 +1,15 @@
 // "Flat" Variational Ladder Auto-Encoder (VLAE)
 
+// - could share more params in model by ignoring level in net names
+// - should memoize getState in guide to avoid redundant computation
+
 
 // Settings
 
 var numLevels = 3;  // number of latent levels in hierarchy
 
 var dataDim = 1;  // length of vector for each datum
-var dataSize = [dataDim]
+var dataSize = [dataDim, 1]
 
 var noiseDim = 3;
 var noiseSize = [noiseDim, 1];
@@ -14,10 +17,17 @@ var noiseSize = [noiseDim, 1];
 var latentDim = 5;
 var latentSize = [latentDim, 1];
 
+var guideLatentDim = 7;
 
-// Model
 
-// - could share more params below by ignoring level in net names
+// Helpers
+
+var call = function(f, a, b, c, d, e) {
+  return f(a, b, c, d, e);
+};
+
+
+// Model with guide
 
 var mlp = function(name, dims) {
   return stack([
@@ -43,7 +53,7 @@ var initNet = function(level, noise) {  // f_L, v_l
   return net(noise);
 };
 
-var noiseDist = function(level) {  //  z_l ~ sampleNoise(l)
+var noiseDist = function(level) {  //  z_l ~ noiseDist(l)
   return DiagCovGaussian({
     mu: zeros(noiseSize),
     sigma: ones(noiseSize)
@@ -57,18 +67,65 @@ var dataDist = function(finalState) {  // r
   })
 };
 
+var initGuide = function(datum) {
+
+  var muNet = function(level, state) {  // mu_l
+    var net = mlp('guide-mu-' + level, { in: guideLatentDim, out: noiseDim });
+    return net(state);
+  };
+
+  var sigmaNet = function(level, state) {  // sigma_l
+    var net = mlp('guide-sigma-' + level, { in: guideLatentDim, out: noiseDim });
+    return net(state);
+  };
+
+  var liftNet = function(level, state) {  // g_l
+    var inputDim = (level === 1) ? dataDim : guideLatentDim;
+    var net = mlp('guide-lift-' + level, { in: inputDim, out: guideLatentDim });
+    return net(state);
+  };
+  
+  var getState = function(level) {  // return state at given level
+    if (level === 0) {
+      return datum;
+    } else {
+      var prevGuideState = getState(level-1);
+      var state = liftNet(level, prevGuideState);
+      return state;
+    }
+  };
+
+  var noiseGuideDist = function(level) {
+    var state = getState(level);
+    return DiagCovGaussian({
+      mu: muNet(level, state),
+      sigma: softplus(sigmaNet(level, state))
+    });
+  };
+
+  globalStore.noiseGuideDist = noiseGuideDist;
+  
+};
+
 var recur = function(level, state) {
   if (level === 0) {
     return dataDist(finalNet(state));
   } else {
-    var noise = sample(noiseDist(level));  // z_l
+    var noise = sample(noiseDist(level), { guide() {
+      return call(globalStore.noiseGuideDist, level);
+    }});  // z_l
     var nextState = combineNet(state, level, noise);  // z_tidle_l
     return recur(level-1, nextState);
   }
 };
 
-var model = function(level) {
-  var noise = sample(noiseDist(level));  // z_L
+var model = function(level, target) {
+  guide(function() {
+    initGuide(target);
+  });
+  var noise = sample(noiseDist(level), { guide() {
+    return call(globalStore.noiseGuideDist, level);
+  }});  // z_L
   var state = initNet(level, noise);  // z_tilde_L
   return recur(level-1, state);
 };
@@ -76,28 +133,45 @@ var model = function(level) {
 
 // Training and sampling
 
+var data = [
+  ones(dataSize),
+  zeros(dataSize)  
+];
+
 Optimize({
-  model() {
-    var dist = model(numLevels);
-    var datum1 = { x: ones(dataSize), y: true }
-    var datum2 = { x: zeros(dataSize), y: true }
-    var datum3 = { x: T.mul(ones(dataSize), 0.5), y: false }
-    mapData({ data: [datum1, datum2, datum3] }, function(datum){
-      if (datum.y) {
-        observe(dist, datum.x);
-      } else {
-        factor(-dist.score(datum.x));  // "unobserve" data point
-      }
+  model() {    
+    mapData({ data }, function(datum) {
+      var dist = model(numLevels, datum);
+      observe(dist, T.reshape(datum, [dataDim]));
     });
   },
   steps: 10000
 });
 
-console.log(JSON.stringify(_.flatten(Infer({
+var showSupport = function(dist) {
+  console.log(JSON.stringify(_.flatten(dist.support()).sort(), null, 2));
+};
+
+// Model posterior with conditioning on data point
+var conditionedDist = Infer({
   model() {
-    var dist = model(numLevels);
-    return T.toScalars(sample(dist));
+    var dist = model(numLevels, data[0]);
+    return T.toScalars(sample(dist, { guide() { return dist; }}));
   },
   method: 'forward',
+  guide: true,
   samples: 50
-}).support()).sort(), null, 2));
+});
+showSupport(conditionedDist);
+
+// Show trained model distribution without conditioning on data point
+var unconditionedDist = Infer({
+  model() {
+    var dist = model(numLevels);
+    return T.toScalars(sample(dist, { guide() { return dist; }}));
+  },
+  method: 'forward',
+  guide: false,
+  samples: 50
+});
+showSupport(unconditionedDist);
