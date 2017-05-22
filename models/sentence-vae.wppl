@@ -1,6 +1,9 @@
 // Inspired by "Generating Sentences from a Continuous Space",
 // Samuel R. Bowman, Luke Vilnis, Oriol Vinyals, Andrew M. Dai, Rafal Jozefowicz & Samy Bengio
 
+// Run using:
+// ./webppl --require ../webppl-fs/ --require ../webppl-nn/ --param-id vae-x --param-store mongo ../neural-nets/models/sentence-vae.wppl --optimize
+
 
 // --------------------------------------------------------------------
 // Helpers
@@ -24,16 +27,16 @@ var reduceLeft = function(f, init, arr) {
 };
 
 
-var observe = function(dist, val) {
-  if (val !== undefined) {
-    factor(dist.score(val));
-    return val;
-  } else {
-    return sample(dist, { guide() {
-      return dist;
-    }});
-  }
-};
+// var observe = function(dist, val) {
+//   if (val !== undefined) {
+//     factor(dist.score(val) * 100);
+//     return val;
+//   } else {
+//     return sample(dist, { guide() {
+//       return dist;
+//     }});
+//   }
+// };
 
 
 var addEndMarker = function(words) {
@@ -72,51 +75,47 @@ var reshapeToSquareMatrix = function(v) {
 // --------------------------------------------------------------------
 // Toy dataset
 
-var dataStrings = [
-  '00000000000000000000',
-  '00000000000000000000',
-  '00000000000000000000',
-  '00000000000000000000',
-  '00000000000000000000',
-  '00000000000000000000',
-  '00000000000000000000',  
-  '00000000000000000000',  
-  '11111111111111111111',  
-  '11111111111111111111',
-  '11111111111111111111',  
-  '11111111111111111111',
-  '22222222222222222222',  
-  '22222222222222222222',
-  '22222222222222222222',
-  '22222222222222222222',  
-  '32333333333333333333',
-  '32333333333333333333',
-  '44444444444444444444',
-  '44444444444444444444'
-];
-
 // var dataStrings = [
-//   '0000000000010001000000100000000',
-//   '0000001101111011111110000111111',
-//   '0000001111111011111110000111111',
-//   '0000010010000000100000010000000',
-//   '0000010010010000001000010000000',
-//   '0001000000010001000000000000000',
-//   '0100001110111011011110000111112',  
-//   '0101011110111011001110000111112',  
-//   '1112202222020012111211222222211',  
-//   '1112222222000011111111222222211',
-//   '1112222222000012111211222222211',  
-//   '1112222222010011111121222222211',
-//   '2222222332233322333333334443344',  
-//   '2222222333333322333333334444444',
-//   '2223222332333322333333334444444',
-//   '2322222332233322333433334443344',  
-//   '3333232333333322434444444545555',
-//   '3333332333333322334444444555555',
-//   '4444555554444433444444455556666',
-//   '4454555554444433444544455556666'
+//   '00000000000000000000',
+//   '00000000000000000000',
+//   '00000000000000000000',
+//   '00000000000000000000',
+//   '00000000000000000000',
+//   '00000000000000000000',
+//   '00000000000000000000',  
+//   '00000000000000000000',  
+//   '11111111111111111111',  
+//   '11111111111111111111',
+//   '11111111111111111111',  
+//   '11111111111111111111',
+//   '11111111111111111111',  
+//   '11111111111111111111',
+//   '11111111111111111111',  
+//   '11111111111111111111',  
 // ];
+
+var dataStrings = [
+  '0000000000010001000000100000000',
+  '0000001101111011111110000111111',
+  '0000001111111011111110000111111',
+  '0000010010000000100000010000000',
+  '0000010010010000001000010000000',
+  '0001000000010001000000000000000',
+  '0100001110111011011110000111112',  
+  '0101011110111011001110000111112',  
+  '1112202222020012111211222222211',  
+  '1112222222000011111111222222211',
+  '1112222222000012111211222222211',  
+  '1112222222010011111121222222211',
+  '2222222332233322333333334443344',  
+  '2222222333333322333333334444444',
+  '2223222332333322333333334444444',
+  '2322222332233322333433334443344',  
+  '3333232333333322434444444545555',
+  '3333332333333322334444444555555',
+  '4444555554444433444444455556666',
+  '4454555554444433444544455556666'
+];
 
 var words = _.uniq(_.join(dataStrings, '').concat(['^', '$']));
 
@@ -133,8 +132,8 @@ var onehotWords = cache(function(word) {
 // --------------------------------------------------------------------
 // Encoder + decoder
 
-var latentDim = 30;
-var maxWords = 18;  // rnn doesn't learn to count to 20, then terminate
+var latentDim = 50; // 30
+var maxWords = 30;  // rnn doesn't learn to count to 20, then terminate
 
 
 // Encoder repeats encoder step until input is completely digested
@@ -169,7 +168,7 @@ var decoder = function(opts) {
   var prevWord = _.last(generatedObservations);
   if ((n === (maxWords + 2)) || (prevWord === '$')) {
     // We're not slicing off the terminal symbol since we'd like to know which
-    // strings were terminated by the maxWords constrained, and which self-terminated
+    // strings were terminated by the maxWords constraint, and which self-terminated
     return generatedObservations.slice(1);
   } else {
     var prevWordVec = onehotWords(prevWord);
@@ -177,7 +176,8 @@ var decoder = function(opts) {
     var ps = decoderNetOutput([nextState, prevWordVec]);
     var observedWord = trueObservations ? trueObservations[0] : '$';
     var wordDist = Categorical({ ps, vs: words });
-    var generatedWord = observe(wordDist, opts.useObservations ? observedWord : undefined);  // FIXME: make sure i don't generate auto-guide here
+    var value = opts.useObservations ? observedWord : undefined;
+    var generatedWord = observe(wordDist, value, { guide() { return wordDist; } });
     return decoder({
       state: nextState,
       n: n + 1,
@@ -241,10 +241,10 @@ var doOptimize = function() {
       return runModel({
         data,
         useObservations: true,
-        batchSize: 5
+//        batchSize: 5
       });
     },
-    steps: 100000,
+    steps: 1000000,
     optMethod: { adam: { stepSize: .01 }}
   });
 };
@@ -258,7 +258,7 @@ var doDream = function() {
         useObservations: true
       });
     },
-    steps: 100,
+    steps: 1000000,
     optMethod: { adam: { stepSize: .01 }},
     estimator: 'dream'
   });
@@ -266,6 +266,7 @@ var doDream = function() {
 
 
 var showModelBehavior = function() {
+  syncParams();
   Infer({
     method: 'forward',
     guide: true,
@@ -288,6 +289,8 @@ var main = function() {
   var cmd = process.argv[process.argv.length - 1];
   if (cmd === '--optimize') {
     doOptimize();
+  } else if (cmd === '--dream') {
+    doDream();    
   } else {
     showModelBehavior();
   }
@@ -297,40 +300,62 @@ var main = function() {
 main();
 
 
-// Current example output:
-
-// Datum:     :  1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-// Recovered: :  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+// Datum:     :  0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 1 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0
+// Recovered: :  2 2 2 2 2 2 2 3 3 2 2 2 3 3 2 3 2 3 3 3 3 3 3 2 2 4 4 4 4 4 4 4
 // 
-// Datum:     :  1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-// Recovered: :  4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4
+// Datum:     :  0 0 0 0 0 0 1 1 0 1 1 1 1 0 1 1 1 1 1 1 1 0 0 0 0 1 1 1 1 1 1
+// Recovered: :  3 3 3 3 3 3 3 3 3 3 3 3 2 2 3 3 3 3 3 3 4 4 4 4 4 4 4 4 5 3 3 4
 // 
-// Datum:     :  1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-// Recovered: :  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+// Datum:     :  0 0 0 0 0 0 1 1 1 1 1 1 1 0 1 1 1 1 1 1 1 0 0 0 0 1 1 1 1 1 1
+// Recovered: :  4 4 4 4 5 5 5 5 5 4 4 4 4 4 3 3 4 4 4 4 4 4 4 5 5 5 5 6 6 6 6 6
 // 
-// Datum:     :  1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-// Recovered: :  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+// Datum:     :  0 0 0 0 0 1 0 0 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 1 0 0 0 0 0 0 0
+// Recovered: :  4 4 4 5 4 5 5 5 5 5 4 4 4 4 4 3 3 4 4 4 5 4 4 4 5 5 5 5 6 6 6 6
 // 
-// Datum:     :  2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2
-// Recovered: :  3 2 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3
+// Datum:     :  0 0 0 0 0 1 0 0 1 0 0 1 0 0 0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 0 0
+// Recovered: :  4 4 4 4 3 3 3 4 4 4 4 4 4 5 5 5 5 5 4 4 4 4 4 4 4 4 4 4 5 4 4 4
 // 
-// Datum:     :  2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2
-// Recovered: :  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+// Datum:     :  0 0 0 1 0 0 0 0 0 0 0 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+// Recovered: :  0 0 0 0 0 1 0 0 1 0 0 0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0
 // 
-// Datum:     :  2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2
-// Recovered: :  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+// Datum:     :  0 1 0 0 0 0 1 1 1 0 1 1 1 0 1 1 0 1 1 1 1 0 0 0 0 1 1 1 1 1 2
+// Recovered: :  1 1 1 0 1 1 2 2 2 2 2 2 2 2 2 1 2 1 1 1 1 1 2 1 1 2 2 2 2 2 2 1
 // 
-// Datum:     :  2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2
-// Recovered: :  2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2
+// Datum:     :  0 1 0 1 0 1 1 1 1 0 1 1 1 0 1 1 0 0 1 1 1 0 0 0 0 1 1 1 1 1 2
+// Recovered: :  1 1 1 2 2 2 2 2 2 2 0 2 0 1 2 0 0 1 1 1 1 1 1 2 1 1 2 2 2 2 2 2
 // 
-// Datum:     :  3 2 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3
-// Recovered: :  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+// Datum:     :  1 1 1 2 2 0 2 2 2 2 0 2 0 0 1 2 1 1 1 2 1 1 2 2 2 2 2 2 2 1 1
+// Recovered: :  2 2 2 2 2 2 2 2 2 2 3 3 2 2 2 3 3 2 3 2 2 4 3 4 4 4 4 4 5 4 5 5
 // 
-// Datum:     :  3 2 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3
-// Recovered: :  4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4
+// Datum:     :  1 1 1 2 2 2 2 2 2 2 0 0 0 0 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 1 1
+// Recovered: :  0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 0 1 1 0 0 1 1 1 0 0 0 0 1 1 1 1 1
 // 
-// Datum:     :  4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4
-// Recovered: :  1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+// Datum:     :  1 1 1 2 2 2 2 2 2 2 0 0 0 0 1 2 1 1 1 2 1 1 2 2 2 2 2 2 2 1 1
+// Recovered: :  1 1 1 2 2 2 2 2 2 2 0 0 0 0 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 1 1 1
 // 
-// Datum:     :  4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4
-// Recovered: :  1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+// Datum:     :  1 1 1 2 2 2 2 2 2 2 0 1 0 0 1 1 1 1 1 1 2 1 2 2 2 2 2 2 2 1 1
+// Recovered: :  1 1 1 2 2 2 2 2 2 2 0 0 0 0 1 2 1 1 1 2 1 1 2 2 2 2 2 2 2 1 1 1
+// 
+// Datum:     :  2 2 2 2 2 2 2 3 3 2 2 3 3 3 2 2 3 3 3 3 3 3 3 3 4 4 4 3 3 4 4
+// Recovered: :  1 1 1 2 2 2 2 2 2 2 0 0 0 0 1 2 1 1 1 1 1 2 1 2 2 2 2 2 2 2 1 1
+// 
+// Datum:     :  2 2 2 2 2 2 2 3 3 3 3 3 3 3 2 2 3 3 3 3 3 3 3 3 4 4 4 4 4 4 4
+// Recovered: :  0 0 0 0 1 0 0 0 1 1 1 1 1 1 0 1 1 1 1 1 0 1 1 0 0 1 1 1 0 0 1 1
+// 
+// Datum:     :  2 2 2 3 2 2 2 3 3 2 3 3 3 3 2 2 3 3 3 3 3 3 3 3 4 4 4 4 4 4 4
+// Recovered: :  0 1 0 0 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+// 
+// Datum:     :  2 3 2 2 2 2 2 3 3 2 2 3 3 3 2 2 3 3 3 4 3 3 3 3 4 4 4 3 3 4 4
+// Recovered: :  1 1 0 1 1 0 1 1 2 2 2 2 2 2 0 2 1 2 1 1 1 2 1 1 2 2 2 2 2 2 1 1
+// 
+// Datum:     :  3 3 3 3 2 3 2 3 3 3 3 3 3 3 2 2 4 3 4 4 4 4 4 4 4 5 4 5 5 5 5
+// Recovered: :  0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 0 1 1 1 1 0 0 0 0 1 1 1 1 1 1 1 2
+// 
+// Datum:     :  3 3 3 3 3 3 2 3 3 3 3 3 3 3 2 2 3 3 4 4 4 4 4 4 4 5 5 5 5 5 5
+// Recovered: :  0 0 0 1 0 0 1 0 0 0 0 0 0 0 0 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0
+// 
+// Datum:     :  4 4 4 4 5 5 5 5 5 4 4 4 4 4 3 3 4 4 4 4 4 4 4 5 5 5 5 6 6 6 6
+// Recovered: :  0 0 0 0 0 1 0 0 1 0 0 0 1 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+// 
+// Datum:     :  4 4 5 4 5 5 5 5 5 4 4 4 4 4 3 3 4 4 4 5 4 4 4 5 5 5 5 6 6 6 6
+// Recovered: :  0 0 0 0 0 1 0 0 1 0 0 1 0 0 0 0 0 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0
