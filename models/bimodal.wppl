@@ -78,7 +78,11 @@ var model_3 = function() {
 
 var data = [
   ones([1, 1]),
-  zeros([1, 1])
+  T.add(ones([1, 1]), .02),
+  T.add(ones([1, 1]), -.02),
+  zeros([1, 1]),
+  T.add(zeros([1, 1]), .02),
+  T.add(zeros([1, 1]), -.02)  
 ];
 
 Optimize({
