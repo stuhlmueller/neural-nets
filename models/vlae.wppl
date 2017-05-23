@@ -1,7 +1,10 @@
 // "Flat" Variational Ladder Auto-Encoder (VLAE)
 
+// Note: the current training/sampling example doesn't work yet
+
 // - could share more params in model by ignoring level in net names
 // - should memoize getState in guide to avoid redundant computation
+// - use more expressive family for dataDist? multivariate gaussian?
 
 
 // Settings
@@ -24,6 +27,10 @@ var guideLatentDim = 7;
 
 var call = function(f, a, b, c, d, e) {
   return f(a, b, c, d, e);
+};
+
+var showSupport = function(dist) {
+  console.log(JSON.stringify(_.flatten(dist.support()).sort(), null, 2));
 };
 
 
@@ -61,7 +68,7 @@ var noiseDist = function(level) {  //  z_l ~ noiseDist(l)
 };
 
 var dataDist = function(finalState) {  // r
-  return DiagCovGaussian({  // use more expressive family here?
+  return DiagCovGaussian({
     mu: T.range(finalState, 0, dataDim),
     sigma: softplus(T.range(finalState, dataDim, dataDim*2))
   })
@@ -148,11 +155,9 @@ Optimize({
   steps: 10000
 });
 
-var showSupport = function(dist) {
-  console.log(JSON.stringify(_.flatten(dist.support()).sort(), null, 2));
-};
 
 // Model posterior with conditioning on data point
+
 var conditionedDist = Infer({
   model() {
     var dist = model(numLevels, data[0]);
@@ -162,9 +167,12 @@ var conditionedDist = Infer({
   guide: true,
   samples: 50
 });
+
 showSupport(conditionedDist);
 
+
 // Show trained model distribution without conditioning on data point
+
 var unconditionedDist = Infer({
   model() {
     var dist = model(numLevels);
@@ -174,4 +182,5 @@ var unconditionedDist = Infer({
   guide: false,
   samples: 50
 });
+
 showSupport(unconditionedDist);
