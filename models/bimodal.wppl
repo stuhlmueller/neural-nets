@@ -43,7 +43,7 @@ var model_3 = function() {
   var x0 = sample(uniformDist, { guide() { return uniformDist; }});
 
   // Create mixture vector [u, 1-u]
-  var m = param({ name: 'm', dims: [2, 1] }); // Vector([1, -1]);
+  var m = param({ name: 'm', dims: [2, 1], init() { return Vector([1, -1]); } }); // Vector([1, -1]);
   var b = Vector([0, 1]);
   var x1 = T.add(T.mul(m, x0), b);
 
