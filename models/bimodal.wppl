@@ -43,7 +43,7 @@ var model_3 = function() {
   var x0 = sample(uniformDist, { guide() { return uniformDist; }});
 
   // Create mixture vector [u, 1-u]
-  var m = Vector([1, -1]);
+  var m = param({ name: 'm', dims: [2, 1] }); // Vector([1, -1]);
   var b = Vector([0, 1]);
   var x1 = T.add(T.mul(m, x0), b);
 
@@ -92,14 +92,22 @@ Optimize({
       observe(dist, datum);
     });
   },
-  steps: 10000
+  steps: 20000
 });
 
 console.log(JSON.stringify(Infer({
   model() {
-    var dist = model_3();
+    var dist = model_3();    
     return T.toScalars(sample(dist, { guide() { return dist; }}))[0];
   },
   method: 'forward',
-  samples: 50
+  samples: 200
 }).support().sort(), null, 2));
+
+var showParams = function(settings) {
+  map(function(setting) {
+    console.log(setting.name, T.toScalars(param(setting)))
+  }, settings);
+};
+
+showParams([{ name: 'm', dims: [2, 1] }]);
