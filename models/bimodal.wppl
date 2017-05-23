@@ -1,16 +1,101 @@
 // No parameters to learn
 var model_1 = function() {
   var u0 = uniform(0, 1);
-  var u = softmax(T.mul(Vector([u0, 1-u0]), 10))
+  var u = softmax(T.mul(Vector([u0, 1-u0]), 10));
   var g1 = gaussian(0, .1);
   var g2 = gaussian(1, .1);
-  return T.toScalars(T.dot(T.transpose(u), Vector([g1, g2])))
+  var out = T.dot(T.transpose(u), Vector([g1, g2]));
+  return T.toScalars(out);
 };
 
-console.log(JSON.stringify(_.flatten(Infer({
+
+// Refactored to use more vector operations
+var model_2 = function() {
+
+  var x0 = uniform(0, 1);
+
+  // Create mixture vector [u, 1-u]
+  var m = Vector([1, -1]);
+  var b = Vector([0, 1]);
+  var x1 = T.add(T.mul(m, x0), b);
+
+  // Apply softmax with alpha=10, convert to column vector
+  var x2 = T.mul(x1, 10);
+  var x3 = softmax(x2);
+  var x4 = T.transpose(x3);
+
+  // Sample a vector with two Gaussians, one centered at 0 and one centered at 1
+  var mu = Vector([0, 1]);
+  var sigma = Vector([.1, .1]);
+  var g = sample(DiagCovGaussian({ mu, sigma }));
+
+  // Multiply mixture vector with Gaussian vector
+  var out = T.dot(x4, g);
+
+  return T.toScalars(out);
+};
+
+
+// Refactored to use standard normal; add data distribution
+var model_3 = function() {
+
+  var uniformDist = Uniform({ a: 0, b: 1 });
+  var x0 = sample(uniformDist, { guide() { return uniformDist; }});
+
+  // Create mixture vector [u, 1-u]
+  var m = Vector([1, -1]);
+  var b = Vector([0, 1]);
+  var x1 = T.add(T.mul(m, x0), b);
+
+  // Apply softmax with alpha=10, convert to column vector
+  var x2 = T.mul(x1, 10);
+  var x3 = softmax(x2);
+  var x4 = T.transpose(x3);
+
+  // Sample a vector with two standard normal samples
+  var unitNormalDist = DiagCovGaussian({
+    mu: Vector([0, 0]),
+    sigma: Vector([1, 1])
+  });
+  var g0 = sample(unitNormalDist, { guide() { return unitNormalDist; }});
+
+  // Transform Gaussian vector so that one is centered at 0 and one centered at 1
+  var gm = Vector([.1, .1]);
+  var gb = Vector([0, 1]);
+  var g1 = T.add(T.mul(g0, gm), gb);
+
+  // Multiply mixture vector with Gaussian vector
+  var out = T.dot(x4, g1);
+
+  var dataDist = DiagCovGaussian({
+    mu: out,
+    sigma: Vector([0.1])
+  });
+  return dataDist;
+};
+
+
+
+var data = [
+  ones([1, 1]),
+  zeros([1, 1])
+];
+
+Optimize({
+  model() {    
+    mapData({ data }, function(datum) {
+      var dist = model_3();
+      observe(dist, datum);
+    });
+  },
+  steps: 10000
+});
+
+console.log(JSON.stringify(Infer({
   model() {
-    return model();
+    var dist = model_3();
+    return T.toScalars(sample(dist, { guide() { return dist; }}))[0];
   },
   method: 'forward',
   samples: 50
-}).support()).sort(), null, 2));
+}).support().sort(), null, 2));
