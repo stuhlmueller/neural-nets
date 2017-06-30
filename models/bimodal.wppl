@@ -1,3 +1,16 @@
+// Helpers
+
+var scalar = function(x) {
+  var xs = T.toScalars(x);
+  assert.ok(xs.length === 1);
+  return xs[0];
+};
+
+var sampleGuideless = function(dist) {
+  return sample(dist, { guide() { return dist; }});
+};
+
+
 // No parameters to learn
 var model_1 = function() {
   var u0 = uniform(0, 1);
@@ -40,7 +53,7 @@ var model_2 = function() {
 var model_3 = function() {
 
   var uniformDist = Uniform({ a: 0, b: 1 });
-  var x0 = sample(uniformDist, { guide() { return uniformDist; }});
+  var x0 = sampleGuideless(uniformDist);
 
   // Create mixture vector [u, 1-u]
   var m = param({ name: 'm', dims: [2, 1], init() { return Vector([1, -1]); } }); // Vector([1, -1]);
@@ -57,7 +70,7 @@ var model_3 = function() {
     mu: Vector([0, 0]),
     sigma: Vector([1, 1])
   });
-  var g0 = sample(unitNormalDist, { guide() { return unitNormalDist; }});
+  var g0 = sampleGuideless(unitNormalDist);
 
   // Transform Gaussian vector so that one is centered at 0 and one centered at 1
   var gm = Vector([.1, .1]);
@@ -71,43 +84,201 @@ var model_3 = function() {
     mu: out,
     sigma: Vector([0.1])
   });
+  
+  // var dataDist = Laplace({
+  //   location: scalar(out),
+  //   scale: .1
+  // });
+  
   return dataDist;
 };
 
 
+// Now using constants instead of the latent normal distributions
+var model_4 = function() {
+
+  var uniformDist = Uniform({ a: 0, b: 1 });
+
+  // Sample weight u in [0, 1]
+  var u = sampleGuideless(uniformDist);
+
+  // Create mixture vector [u, 1-u]
+  var m = param({ name: 'm', dims: [2, 1], init() { return Vector([1, -1]); } });
+  var b = Vector([0, 1]);
+  var weights = T.add(T.mul(m, u), b);
+
+  // Push mixture weights towards 0/1 by applying softmax with alpha=10
+  var exWeights = softmax(T.mul(weights, 10));
+
+  // Get first element
+  var w = T.get(exWeights, 0);
+
+  var dataDist = Gaussian({ mu: w, sigma: 0.1 });
+  
+  return dataDist;
+};
+
+
+// Replacing softmax with tanh, simplifying
+var model_5 = function() {
+
+  var uniformDist = Uniform({ a: 0, b: 1 });
+
+  var u = sampleGuideless(uniformDist);
+
+  var m = scalar(param({ name: 'm', dims: [1, 1], init() { return Vector([10]) } }));
+  var w = Math.tanh(m*u - m/2) * .5 + 0.5;
+
+  return Gaussian({ mu: w, sigma: 0.1 });
+};
+
+
+// var data = [
+//   1,
+//   1.02,
+//   0.98,
+//   0,
+//   0.02,
+//   -0.02
+// ];
+
+
+var main = function(data) {
+  
+  var getNormalizationConstant = function() {
+    var dist = Infer({
+      model() {
+        mapData({ data }, function(datum) {
+          var dist = model_5();
+          observe(dist, datum);    
+        });
+      },
+      method: 'SMC',
+      particles: 5000
+    });
+    return dist.normalizationConstant;
+  };
+
+  console.log('Normalization constant before optimization:', getNormalizationConstant());
+
+  Optimize({
+    model() {    
+      mapData({ data }, function(datum) {
+        var dist = model_5();
+        observe(dist, datum);
+      });
+    },
+    steps: 10000
+  });
+
+  console.log(JSON.stringify(Infer({
+    model() {
+      var dist = model_5();    
+      return sampleGuideless(dist);
+    },
+    method: 'forward',
+    samples: 500
+  }).support().sort(), null, 2));
+
+  var showParams = function(settings) {
+    map(function(setting) {
+      console.log(setting.name, T.toScalars(param(setting)))
+    }, settings);
+  };
+
+  showParams([{ name: 'm', dims: [1, 1] }]);
+
+  console.log('Normalization constant after optimization:', getNormalizationConstant());
+
+};
+
+// main(data);
+
+
+
+var model = function(c) {
+
+  // Sample random number in [0, 1]
+  var uDist = Uniform({ a: 0, b: 1 });
+  var u = sample(uDist);  // { guide() { return uDist; } }
+
+  // Extremify the number (push away from 0.5 towards 0/1)
+  var mu = Math.tanh(c*u - c/2) * .5 + 0.5;
+
+  // Sample from a peaky Gaussian centered around that number
+  return Gaussian({ mu, sigma: 0.1 });
+  
+}
+// var model = function(c) {
+
+//   // Sample random number in [0, 1]
+//   var u = sampleGuideless(Uniform({ a: 0, b: 1 }));
+
+//   // Extremify the number (push away from 0.5 towards 0/1)
+//   var mu = Math.tanh(c*u - c/2) * .5 + 0.5;
+
+//   // Sample from a peaky Gaussian centered around that number
+//   return Gaussian({ mu, sigma: 0.1 });
+  
+// }
+
+// console.log(JSON.stringify(Infer({
+//   model() {
+//     var dist = model(10);
+//     return sample(dist)
+//   },
+//   method: 'forward',
+//   samples: 1000
+// }).support().sort(), null, 2));
+
 
 var data = [
-  ones([1, 1]),
-  T.add(ones([1, 1]), .02),
-  T.add(ones([1, 1]), -.02),
-  zeros([1, 1]),
-  T.add(zeros([1, 1]), .02),
-  T.add(zeros([1, 1]), -.02)  
+  1,
+  1.02,
+  0.98,
+  0,
+  0.02,
+  -0.02
 ];
 
+var parameterizedModel = function() {
+  var c = scalar(param({ name: 'c', dims: [1, 1], init() { Vector([10]) } }));
+  mapData({ data }, function(datum) {
+    var dist = model(c);
+    observe(dist, datum);
+  });
+}
+
+var getNormalizationConstant = function() {
+  var dist = Infer({
+    model: parameterizedModel,
+    method: 'SMC',
+    particles: 5000
+  });
+  return dist.normalizationConstant;
+};
+
+console.log('Normalization constant before optimization:', getNormalizationConstant());
+
 Optimize({
-  model() {    
-    mapData({ data }, function(datum) {
-      var dist = model_3();
-      observe(dist, datum);
-    });
+  model() {
+    return parameterizedModel();
   },
   steps: 20000
 });
 
+console.log(JSON.stringify(getParams(), null, 2))
+
+console.log('Normalization constant after optimization:', getNormalizationConstant());
+
+console.log('c is', param({ name: 'c', dims: [1, 1] }));
+
 console.log(JSON.stringify(Infer({
   model() {
-    var dist = model_3();    
-    return T.toScalars(sample(dist, { guide() { return dist; }}))[0];
+    var c = param({ name: 'c', dims: [1, 1] });
+    var dist = model(c)
+    return sample(dist);
   },
   method: 'forward',
-  samples: 200
+  samples: 1000
 }).support().sort(), null, 2));
-
-var showParams = function(settings) {
-  map(function(setting) {
-    console.log(setting.name, T.toScalars(param(setting)))
-  }, settings);
-};
-
-showParams([{ name: 'm', dims: [2, 1] }]);

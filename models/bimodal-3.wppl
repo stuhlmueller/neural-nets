@@ -1,0 +1,85 @@
+// Expressive p, expressive q
+
+var model = function() {
+
+  // Sample random number in [0, 1]
+  var uDist = Uniform({ a: 0, b: 1 });
+  var u = sample(uDist);
+
+  // Likelihood model that supports both unimodal and bimodal distributions:
+  var muNet = function(x) {
+    return param({ name: 'mu-m' }) * x + param({ name: 'mu-b' });
+  };
+  var sigmaNet = function(x) {
+    return param({ name: 'sigma-m' }) * x + param({ name: 'sigma-b' });
+  };  
+  return LogitNormal({
+    mu: muNet(u),
+    sigma: Math.log(Math.exp(sigmaNet(u)) + 1),
+    a: -0.05,
+    b: 1.05
+  });
+  
+}
+
+
+var data = [
+  1,
+  1.02,
+  0.98,
+  0,
+  0.02,
+  -0.02
+];
+
+var parameterizedModel = function() {
+  // var c = param({ name: 'c' });
+  mapData({ data }, function(datum) {
+    var dist = model();
+    observe(dist, datum);
+  });
+}
+
+Optimize({
+  model() {
+    return parameterizedModel();
+  },
+  steps: 30000
+});
+
+console.log(JSON.stringify(Infer({
+  model() {
+    // var c = param({ name: 'c' });
+    var dist = model()
+    return sample(dist);
+  },
+  method: 'forward',
+  samples: 1000
+}).support().sort(), null, 2));
+
+console.log(JSON.stringify(_.pick(getParams(), ['mu-m', 'sigma-m', 'mu-b', 'sigma-b']), null, 2));
+
+// {
+//   "mu-m": [
+//     {
+//       "dims": [
+//         1
+//       ],
+//       "length": 1,
+//       "data": {
+//         "0": -0.2986141308476467
+//       }
+//     }
+//   ],
+//   "sigma-m": [
+//     {
+//       "dims": [
+//         1
+//       ],
+//       "length": 1,
+//       "data": {
+//         "0": 1.3967318232716137
+//       }
+//     }
+//   ]
+// }
