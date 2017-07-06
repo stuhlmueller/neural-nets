@@ -2,3 +2,6 @@ notes/
 misc/
 data/mnist/
 data/vlae/
+terraform.tfstate
+terraform.tfstate.backup
+machines.txt
