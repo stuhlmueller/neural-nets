@@ -38,6 +38,9 @@ RUN conda install jupyter -y
 ## InferSent
 
 RUN git clone https://github.com/facebookresearch/InferSent.git /infersent
+RUN apt-get install -y unzip
+RUN cd /infersent/dataset/ && ./get_data.bash
+RUN cd /infersent && curl -Lo encoder/infersent.allnli.pickle https://s3.amazonaws.com/senteval/infersent/infersent.allnli.pickle
 
 
 ENV project_git_url https://github.com/stuhlmueller/neural-nets.git
@@ -54,5 +57,5 @@ CMD if [ ! -d "/project" ]; then \
     fi && \
     cd /project && \
     git log -1 > /data/config/git.txt && \
-    echo "$OPTIONS" > /data/config/options.txt && \
+    echo "$OPTIONS" > /data/config/options.txt && \    
     eval "$experiment_cmd $OPTIONS"
