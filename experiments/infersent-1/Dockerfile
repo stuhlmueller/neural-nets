@@ -35,7 +35,12 @@ RUN conda install pytorch torchvision -c soumith -y
 RUN conda install jupyter -y
 
 
-ENV project_git_url https://github.com/stuhlmueller/logistician.git
+## InferSent
+
+RUN git clone https://github.com/facebookresearch/InferSent.git /infersent
+
+
+ENV project_git_url https://github.com/stuhlmueller/neural-nets.git
 ENV experiment_cmd "python models/pytorch/infersent-pretrained.py"
 
 # Placeholders in case this Docker image isn't mounted with an appropriate volume at /data
